@@ -1,0 +1,28 @@
+# Local secrets and configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/secrets/
+
+# Wallet state and backups must live outside source control
+/wallet-data/
+/backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.backup
+*.bak
+
+# Build output and local tooling
+/target/
+/build/
+/dist/
+/node_modules/
+/.cache/
+*.log
+.DS_Store
