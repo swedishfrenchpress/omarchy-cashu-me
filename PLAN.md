@@ -35,6 +35,10 @@ Cashu.me is an interaction reference, not a requirement to replicate its complet
 - The shell's color components load theme files at startup and receive runtime theme changes through IPC. Importing the components into a separate app will not alone establish live theme updates. Verify directory replacement, font changes, and user overrides in the integration design.
 - CDK provides wallet and SQLite components and advertises deterministic recovery support. Its APIs and the chosen release must be inspected and pinned before implementation; no runtime-size or performance claims have been validated yet.
 - Seed recovery and full backup restoration are distinct. Seed recovery relies on known mints and their recovery support; a phrase is not a complete history or pending-operation backup. Restoration must reconcile saved data against current mint state.
+- CDK source inspected at commit `1368c131a8f65e08b008e752e0494f895606b17c` (workspace version 0.18.0): `cdk-sqlite` has a `sqlcipher` feature and accepts a database path plus password. It configures WAL, full synchronization, and memory-backed temporary storage. Verify encryption at runtime and failure with an incorrect key; passing a password alone must never be accepted as proof that SQLCipher is enabled.
+- CDK documents calling `recover_incomplete_sagas()` after wallet construction for interrupted swap/send/receive/melt operations. Pending mint quotes require separate reconciliation through `mint_unissued_quotes()`. Recovery requires network access; an unavailable mint must not turn reserved funds into spendable funds.
+- CDK default features include capabilities beyond this wallet. Plan to disable default features and explicitly enable the required wallet and encrypted SQLite features after resolving the release version.
+- Quickshell supports a normal standalone `FloatingWindow` and managed child processes with stdin/stdout communication. A separate Quickshell window plus a Rust/CDK child process is the current architectural recommendation for directly reusing Omarchy's controls. This is not yet a validated integration or a committed implementation choice.
 
 Sources: [CDK](https://github.com/cashubtc/cdk), [NUT-09 signature restoration](https://github.com/cashubtc/nuts/blob/main/09.md), [NUT-13 deterministic secrets](https://github.com/cashubtc/nuts/blob/main/13.md), and read-only inspection of the installed Omarchy shell.
 
@@ -102,6 +106,7 @@ These are sequencing proposals. Detailed acceptance criteria and GitHub Issues f
 - [x] Establish this planning record and repository scaffold.
 - [ ] Finish CDK persistence, recovery, and native integration investigation.
 - [ ] Resolve product and security questions with the user.
+- [ ] Answer the current product questions: home layout, QR input methods, and behavior when closing the window.
 - [ ] Agree on the complete implementation specification.
 - [ ] Create milestone issues from the agreed specification.
 - [ ] Implement and validate the wallet.
