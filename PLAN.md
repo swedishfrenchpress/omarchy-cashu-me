@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-08
 
-**Status: discovery and planning. This is a living planning record, not an approved implementation specification.**
+**Status: native interface milestone in progress; payment and security specification still being finalized.**
 
 ## Goal
 
@@ -23,6 +23,9 @@ Build a lean, native desktop Cashu wallet for personal daily use on Omarchy. Reu
 | Recovery | Recovery phrase plus mint list, and an encrypted full backup file. |
 | Local project | `~/Documents/github/cashu-wallet` |
 | Project name | Chaumarchy. |
+| Home layout | Selected mint and balance, Send/Receive, recent history below, and a small Settings entry. |
+| QR input | Paste, screen-region scanning, saved-image import, and webcam scanning. |
+| Window close | Keep running and monitor payments in the background; provide a separate Quit action. Monitoring is not implemented in the current preview. |
 | GitHub | Public repository: `swedishfrenchpress/chaumarchy`, created by the user; publish planning before wallet implementation. |
 
 Cashu.me is an interaction reference, not a requirement to replicate its complete feature set.
@@ -48,16 +51,15 @@ Resolve these through source inspection where possible, and user discussion for 
 
 ### Native architecture and desktop integration
 
-- How should Qt/QML call CDK: an in-process Rust bridge or a private local backend process? Compare packaging, failure isolation, and implementation complexity.
-- Can the Omarchy controls be reused directly in a standalone window, or should a minimal subset be adapted with appropriate license attribution? Determine dependency and update compatibility.
-- Which theme notification or file-watching mechanism handles atomic theme replacement, fonts, overrides, and malformed or missing theme files reliably?
-- Should closing the window exit completely, or keep pending-payment monitoring running? What happens to in-flight operations when the desktop locks?
+- Use a standalone Quickshell window with direct imports of installed Omarchy components, and a managed Rust/CDK child process communicating over private stdin/stdout. Keep wallet secrets out of command arguments, environment variables, and general-purpose shell IPC.
+- The initial theme integration watches the active theme's parent directory with `inotifywait`, debounces updates, and reloads Omarchy's shared palette/style objects without application reload. Fonts and user shell overrides use the existing Omarchy watchers. Expand tests for malformed files, fonts, and repeated changes before marking this integration complete.
+- Confirm desktop-lock behavior with background monitoring. The existing agreed default is to lock with the desktop; closing the window alone does not lock. In-flight operations must persist and reconcile after unlocking.
 - What measurable startup, idle CPU, memory, and installation-size targets define "lean" on this machine?
 
 ### Payment experience
 
 - Agree on the home layout, mint selector, history details, keyboard navigation, and send/receive review screens.
-- Choose QR input methods: paste/text, image import, screen capture, camera; decide whether animated QR support is required initially.
+- QR input methods are selected; decide whether animated QR support is required initially.
 - Define onboarding and mint trust: initial mint selection, unfamiliar mints in received tokens, unsupported capabilities, and removing a mint with funds.
 - Define fees, available versus reserved balance, pending token sharing, reclaim behavior, expired invoices, and uncertain payment outcomes.
 - Confirm first-release boundaries for Lightning addresses, BOLT12, payment requests, on-chain transfers, P2PK, Tor, and protocol URL handling.
@@ -106,7 +108,10 @@ These are sequencing proposals. Detailed acceptance criteria and GitHub Issues f
 - [x] Establish this planning record and repository scaffold.
 - [ ] Finish CDK persistence, recovery, and native integration investigation.
 - [ ] Resolve product and security questions with the user.
-- [ ] Answer the current product questions: home layout, QR input methods, and behavior when closing the window.
+- [x] Answer the current product questions: home layout, QR input methods, and behavior when closing the window.
+- [x] Build and visually inspect a standalone native interface preview using installed Omarchy controls.
+- [x] Test atomic theme replacement while hidden, reopening the existing process, and explicit quit in an isolated native test.
+- [ ] Confirm desktop-lock behavior and onboarding mint selection.
 - [ ] Agree on the complete implementation specification.
 - [ ] Create milestone issues from the agreed specification.
 - [ ] Implement and validate the wallet.
@@ -121,3 +126,4 @@ Update this file whenever a decision is agreed. Move resolved questions into con
 - **2026-09-08:** User selected CDK instead of Coco and requested a public GitHub repository before implementation.
 - **2026-09-08:** Authorized repository creation and recording the current plan; wallet implementation remains pending further planning.
 - **2026-09-08:** User named the project Chaumarchy and created `swedishfrenchpress/chaumarchy`. Use that repository and preserve its initial commit and license; retain the requested local folder name `cashu-wallet`.
+- **2026-09-08:** User selected recent history on home, all proposed QR input methods, and continued background monitoring when the window closes. Started the native interface milestone; payment and security questions remain open.

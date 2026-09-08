@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+omarchy_shell=${OMARCHY_PATH:-/usr/share/omarchy}/shell
+runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/ui
+
+for dependency in quickshell inotifywait; do
+  command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
+done
+for module in Commons Ui; do
+  test -f "$omarchy_shell/$module/qmldir" || { echo "Omarchy UI module missing: $module" >&2; exit 1; }
+done
+
+umask 077
+mkdir -p "$runtime_dir"
+ln -sfn "$omarchy_shell/Commons" "$runtime_dir/Commons"
+ln -sfn "$omarchy_shell/Ui" "$runtime_dir/Ui"
+# Quickshell exposes modules below its config root through the qs.* namespace.
+# Keep packaged Omarchy files untouched and use a private runtime config.
+for source_file in "$project_dir"/ui/*.qml; do
+  destination="$runtime_dir/$(basename -- "$source_file")"
+  if ! cmp -s "$source_file" "$destination"; then cp "$source_file" "$destination"; fi
+done
+
+case ${1:-} in
+  --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
+  --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
+  --check) exec quickshell -p "$runtime_dir" ;;
+  "") ;;
+  *) echo 'Usage: chaumarchy [--status|--quit|--check]' >&2; exit 2 ;;
+esac
+
+# An existing instance owns the window and will eventually own the wallet.
+if quickshell ipc -p "$runtime_dir" call -- wallet show >/dev/null 2>&1; then
+  exit 0
+fi
+exec quickshell -n -p "$runtime_dir"
