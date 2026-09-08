@@ -17,7 +17,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 | Home | Selected mint, balance, Send/Receive, recent history, pending invoices/ecash, Settings. |
 | Payments | Cashu tokens and BOLT11 Lightning invoices, in sats, with explicit review and confirmation. |
 | Mints | Multiple explicit mints, separate balances, no automatic transfers. Minibits, Chorus OFF, Antifiat, Macadamia, and custom URLs. |
-| Protection | Password-encrypted SQLCipher database; desktop lock stops the worker and clears sensitive views. |
+| Protection | Optional password under Settings → Security. New wallets start with a private device key and open automatically. Desktop lock stops the worker and clears sensitive views. |
 | Window lifecycle | Closing keeps an unlocked wallet monitoring in the background. Lock stops it; unlock reconciles; Quit exits. |
 | Recovery | Recovery phrase with mint URLs, plus encrypted full backup with a separate password. No overwrite during restore. |
 | QR input | Paste, screen region, saved image, and webcam. Static QR generation; oversized tokens remain shareable as text. |
@@ -67,7 +67,7 @@ The following work remains explicit; passing the first integration suite does no
 
 ## Deferred scope
 
-Lightning addresses, BOLT12, on-chain transfers, animated QR, automatic cross-mint transfer, protocol URL registration, in-app password changes, and broader Linux distribution packaging are not implemented. Mint removal and large-history navigation need product/retention decisions before adding destructive controls. These are scope boundaries for this milestone, not claims that the user rejected future support.
+Lightning addresses, BOLT12, on-chain transfers, animated QR, automatic cross-mint transfer, protocol URL registration, and broader Linux distribution packaging are not implemented. Mint removal and large-history navigation need product/retention decisions before adding destructive controls. These are scope boundaries for this milestone, not claims that the user rejected future support.
 
 ## Planning workflow
 
@@ -83,3 +83,5 @@ This file is the progress tracker. Keep its checkboxes, decisions, and next mile
 - **2026-09-08:** User confirmed locking with the desktop and requested Minibits, Chorus OFF Mint, Antifiat, and Macadamia as onboarding suggestions. Verified their public metadata and recorded the catalog; this does not add them to a live wallet.
 
 - **2026-09-09:** User asked to continue building. Implemented the working CDK wallet milestone and controlled tests; retained daily-use validation as an open milestone.
+
+- **2026-09-09:** User reported stalled setup and changed the onboarding requirement: a simple animated Omarchy-style introduction, with no password gate. Password protection is optional under Security. Device-mode wallets reopen automatically after desktop unlock; protected wallets require their password. Added actual UI-button and security-transition regression tests.

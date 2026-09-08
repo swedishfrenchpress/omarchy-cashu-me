@@ -38,7 +38,7 @@ python3 tests/native_wallet.py
 
 The worker integration checks token send/receive, duplicate receipt, cancellation, insufficient balance, saved invoice retrieval, QR image decoding, Lightning payment, crash/restart recovery, pending token reconstruction/reclaim, interruption during review, stale backup restore, and phrase restore. Wallets and backups are temporary.
 
-The native worker test injects test-only controls into a temporary QML copy and starts a separate fake Omarchy shell exposing lock state. It checks invoice QR display, actual automatic receipt while hidden, send review/confirmation, phrase display, clearing sensitive views on lock, and password unlock with the right balance. It never locks the actual desktop. Allow roughly 35 seconds for the background timer.
+The native worker test injects test-only controls into a temporary QML copy and starts a separate fake Omarchy shell exposing lock state. It activates the actual onboarding Create wallet button with no password, checks automatic reopening after desktop lock while hidden, invoice QR display, automatic receipt while hidden, send review/confirmation, enabling the password through Security controls, phrase display, clearing sensitive views on lock, and password unlock with the right balance. It never locks the actual desktop. Allow roughly 35 seconds for the background timer.
 
 QR decoding tests use `rsvg-convert` and `zbarimg`. Screen-region and webcam input still need physical desktop/device checks.
 
@@ -56,3 +56,5 @@ Passing the local tests is a development milestone; it does not establish produc
 ## First resource baseline
 
 On the development machine, Rust 1.98.0 produced a stripped release worker of 16,282,032 bytes (15.5 MiB). With the native setup screen visible and no wallet unlocked, the worker used about 6.6 MiB RSS. The UI used about 170 MiB RSS / 84 MiB PSS; shared Qt libraries contribute to RSS. A five-second idle UI CPU sample rounded to 0.0%. That sample excludes short-lived lock-probe subprocesses and is not a startup or unlocked-wallet benchmark. More representative measurements remain on the plan.
+
+The Rust security tests cover enabling/removing optional password protection, wrong-password rejection, device-key permissions, recovery-phrase preservation, and restoring an encrypted backup without requiring a new wallet password.

@@ -23,17 +23,23 @@ chaumarchy --status
 chaumarchy --quit
 ```
 
-Closing the window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after password unlock. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
+Closing the window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
 
 ## Using the wallet
 
-1. Create a password-encrypted wallet, or restore into a new wallet using an encrypted backup or recovery words and mint URLs.
+1. Start with the animated introduction and choose Create wallet. No password or account is required. You can also restore a backup or use recovery words and mint URLs.
 2. In Settings, explicitly add a suggested mint or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
 3. Receive by creating a BOLT11 Lightning invoice or redeeming a Cashu token. Paste tokens, scan a screen region, import a QR image, or use a webcam.
 4. Send by entering an ecash amount or a BOLT11 invoice. Review the mint, amount, and maximum fee/debit before confirmation.
 5. Home shows the selected mint's balance, recent history, saved pending invoices, and unclaimed ecash. Reopen a token to share it again, or reclaim it if it remains unspent.
 
 Balances stay separate by mint. A token from an unfamiliar mint requires explicitly adding that mint first. This version uses sats and static QR codes. Large tokens can be copied as text. Lightning addresses, BOLT12, on-chain transfers, animated QR, and automatic transfers between mints are outside this milestone.
+
+## Optional password
+
+In Settings → Security, enable a wallet password whenever you want. With it enabled, the wallet requires that password when opened and after desktop lock. Removing it requires the current password.
+
+Without a password, Chaumarchy keeps its database key in a private local file and opens automatically with your desktop session. Anyone able to access your desktop account can open the wallet. Password protection encrypts that key and removes the local unprotected copy. Encrypted backups still have their own password, independently of this setting.
 
 ## Backup and restore
 

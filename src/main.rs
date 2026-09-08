@@ -1,3 +1,4 @@
+mod access;
 mod payments;
 mod wallet;
 
@@ -102,7 +103,9 @@ async fn main() {
             return;
         }
     };
-    emit(json!({"event":"state","state":{"unlocked":false,"exists":storage.exists()}}));
+    emit(
+        json!({"event":"state","state":{"unlocked":false,"exists":storage.exists(),"password_required":storage.exists() && access::Access::new(&storage.path).password_required()}}),
+    );
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Zeroizing<String>>(8);
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -176,6 +179,14 @@ async fn main() {
                             }
                         }
                     }
+                    "set_password" => match session.as_mut() {
+                        Some(session) => session.set_password(&password).map(|_| json!({"security_updated":true})),
+                        None => Err("Open the wallet first.")
+                    },
+                    "remove_password" => match session.as_mut() {
+                        Some(session) => session.remove_password(&password).map(|_| json!({"security_updated":true})),
+                        None => Err("Open the wallet first.")
+                    },
                     "recovery_phrase" => match &session {
                         Some(session) => Ok(session.recovery_phrase()),
                         None => Err("Unlock the wallet first.")

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::access::Access;
 use bip39::Mnemonic;
 use cdk::cdk_database::WalletDatabase;
 use cdk::nuts::CurrencyUnit;
@@ -78,9 +79,12 @@ pub struct Session {
     settings: Settings,
     wallets: BTreeMap<String, Wallet>,
     sync_status: BTreeMap<String, &'static str>,
+    access: Access,
+    data_key: Zeroizing<String>,
+    password_required: bool,
 }
 
-fn encrypted_connection(path: &Path, password: &str) -> Result<Connection> {
+pub(crate) fn encrypted_connection(path: &Path, password: &str) -> Result<Connection> {
     let file_metadata = fs::symlink_metadata(path).map_err(|_| "Wallet file is missing.")?;
     if !file_metadata.is_file() || file_metadata.file_type().is_symlink() {
         return Err("Wallet must be a regular file.");
@@ -151,9 +155,10 @@ impl Session {
         mnemonic: Mnemonic,
         settings: Settings,
     ) -> Result<Self> {
-        if password.chars().count() < 12 {
-            return Err("Use a wallet password of at least 12 characters.");
+        if storage.exists() {
+            return Err("A wallet already exists on this device.");
         }
+        let key = Access::new(&storage.path).creation_key(password)?;
         // create_new prevents overwriting an existing wallet, including an incomplete one.
         OpenOptions::new()
             .write(true)
@@ -161,7 +166,7 @@ impl Session {
             .mode(0o600)
             .open(&storage.path)
             .map_err(|_| "A wallet file already exists or cannot be created.")?;
-        let connection = encrypted_connection(&storage.path, password)?;
+        let connection = encrypted_connection(&storage.path, &key)?;
         let phrase = Zeroizing::new(mnemonic.to_string());
         connection.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE chaumarchy_meta (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL,
@@ -185,7 +190,9 @@ impl Session {
     }
 
     pub async fn open(storage: &Storage, password: &str) -> Result<Self> {
-        let connection = encrypted_connection(&storage.path, password)?;
+        let access = Access::new(&storage.path);
+        let key = access.unlock_key(password)?;
+        let connection = encrypted_connection(&storage.path, &key)?;
         let (version, phrase, settings): (i64, String, String) = connection
             .query_row(
                 "SELECT version,mnemonic,settings FROM chaumarchy_meta WHERE id=1",
@@ -201,14 +208,14 @@ impl Session {
         let settings: Settings =
             serde_json::from_str(&settings).map_err(|_| "Wallet settings are damaged.")?;
         let db = Arc::new(
-            WalletSqliteDatabase::new((storage.path.clone(), password.to_owned()))
+            WalletSqliteDatabase::new((storage.path.clone(), key.to_string()))
                 .await
                 .map_err(|_| "Cannot initialize the CDK wallet database.")?,
         );
         // CDK performs schema migrations on its own connection. Reopen ours so
         // SQLCipher export sees the completed schema rather than a cached one.
         drop(connection);
-        let connection = encrypted_connection(&storage.path, password)?;
+        let connection = encrypted_connection(&storage.path, &key)?;
         let mut session = Self {
             metadata: connection,
             mnemonic,
@@ -216,6 +223,9 @@ impl Session {
             settings,
             wallets: BTreeMap::new(),
             sync_status: BTreeMap::new(),
+            password_required: access.password_required(),
+            access,
+            data_key: key,
         };
         for mint in &session.settings.mints {
             session
@@ -396,7 +406,7 @@ impl Session {
         }
         Ok(
             json!({"unlocked":true,"exists":true,"mints":mints,"selected":self.settings.selected,
-            "history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"restoring":self.settings.needs_restore}),
+            "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"restoring":self.settings.needs_restore}),
         )
     }
 
@@ -474,6 +484,18 @@ impl Session {
         )
     }
 
+    pub fn set_password(&mut self, password: &str) -> Result<()> {
+        let result = self.access.enable(&self.data_key, password);
+        self.password_required = self.access.password_required();
+        result
+    }
+
+    pub fn remove_password(&mut self, password: &str) -> Result<()> {
+        let result = self.access.disable(&self.data_key, password);
+        self.password_required = self.access.password_required();
+        result
+    }
+
     pub fn recovery_phrase(&self) -> Value {
         json!({"phrase": self.mnemonic.to_string(), "mints": self.settings.mints})
     }
@@ -503,7 +525,8 @@ impl Session {
         if version != 1 || Mnemonic::parse(phrase.as_str()).is_err() {
             return Err("Unsupported or damaged backup.");
         }
-        export_encrypted(&backup, &storage.path, new_password)?;
+        let key = Access::new(&storage.path).creation_key(new_password)?;
+        export_encrypted(&backup, &storage.path, &key)?;
         Self::open(storage, new_password).await
     }
 }
@@ -715,6 +738,66 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn optional_password_preserves_wallet_across_security_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path()).unwrap();
+        let mut session = Session::create(&storage, "").await.unwrap();
+        let phrase = session.mnemonic.to_string();
+        assert!(!session.password_required);
+        assert!(temp.path().join("device.key").exists());
+        assert!(session.set_password("short").is_err());
+        session.set_password("optional password 123").unwrap();
+        assert!(session.password_required);
+        assert!(!temp.path().join("device.key").exists());
+        let vault = fs::read(temp.path().join("access.sqlite")).unwrap();
+        assert!(!vault.starts_with(b"SQLite format 3"));
+        assert!(!vault
+            .windows(session.data_key.len())
+            .any(|bytes| bytes == session.data_key.as_bytes()));
+        assert_eq!(
+            fs::metadata(temp.path().join("access.sqlite"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(session);
+        assert!(Session::open(&storage, "").await.is_err());
+        assert!(Session::open(&storage, "incorrect password").await.is_err());
+        let mut session = Session::open(&storage, "optional password 123")
+            .await
+            .unwrap();
+        assert_eq!(session.mnemonic.to_string(), phrase);
+        assert!(session.remove_password("incorrect password").is_err());
+        assert!(!temp.path().join("device.key").exists());
+        session.remove_password("optional password 123").unwrap();
+        assert!(!session.password_required);
+        assert!(!temp.path().join("access.sqlite").exists());
+        drop(session);
+        let session = Session::open(&storage, "").await.unwrap();
+        assert_eq!(session.mnemonic.to_string(), phrase);
+        assert_eq!(
+            fs::metadata(temp.path().join("device.key"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let backup = temp.path().join("export.backup");
+        session
+            .export_backup(&backup, "export password 123")
+            .unwrap();
+        let restored = Storage::new(&temp.path().join("restored")).unwrap();
+        let session = Session::import_backup(&restored, &backup, "export password 123", "")
+            .await
+            .unwrap();
+        assert_eq!(session.mnemonic.to_string(), phrase);
+        assert!(!session.password_required);
     }
 
     #[tokio::test]

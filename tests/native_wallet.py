@@ -16,18 +16,24 @@ OMARCHY = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
 CONTROLS = '''
     IpcHandler {
         target: "test"
-        function create(): void { backend.request("create", {password: "temporary native test password"}) }
-        function unlock(): void { backend.request("unlock", {password: "temporary native test password"}) }
+        function create(): void { if (welcome.createAction.enabled) welcome.createAction.clicked() }
+        function unlock(): void { password.text = "temporary native test password"; if (unlockButton.enabled) unlockButton.clicked() }
+        function protect(): void {
+            app.page = "settings"
+            securityPassword.text = "temporary native test password"
+            securityConfirmation.text = securityPassword.text
+            if (enablePasswordButton.enabled) enablePasswordButton.clicked()
+        }
         function mint(): void { backend.request("add_mint", {url: "http://127.0.0.1:33381"}) }
         function invoice(): void { backend.request("create_invoice", {amount: "64"}) }
         function sync(): void { backend.request("sync") }
         function phrase(): void { app.page = "settings"; backend.request("recovery_phrase") }
         function send(): void { backend.request("send_ecash", {amount: "8"}) }
         function confirm(): void { backend.request("confirm_payment", {review_id: backend.reviewId}) }
-        function capture(): void { testContent.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }
+        function capture(): void { contentScroll.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }
         function inspect(): string {
             return JSON.stringify({ready: backend.ready, busy: backend.busy, unlocked: backend.unlocked,
-                safe: desktopLock.safeToUnlock, error: backend.error, page: app.page,
+                passwordRequired: backend.state.password_required, safe: desktopLock.safeToUnlock, error: backend.error, page: app.page,
                 hasPhrase: backend.recoveryPhrase !== "", hasShare: !!backend.share.token || !!backend.share.invoice,
                 hasQr: !!backend.share.qr, hasReview: !!backend.review,
                 balance: app.selectedMint.spendable, mints: (backend.state.mints || []).length})
@@ -50,7 +56,6 @@ class NativeWallet(unittest.TestCase):
             for module in ("Commons", "Ui"):
                 (ui / module).symlink_to(OMARCHY / module, target_is_directory=True)
             source = (ui / "shell.qml").read_text()
-            source = source.replace("Controls.ScrollView {", "Controls.ScrollView {\n id: testContent", 1)
             (ui / "shell.qml").write_text(source.replace('    id: app\n', '    id: app\n' + CONTROLS, 1))
             shell = base / "omarchy/shell"; shell.mkdir(parents=True)
             (shell / "shell.qml").write_text('''import Quickshell
@@ -97,6 +102,15 @@ ShellRoot {
                         time.sleep(0.3)
                         self.assertTrue(Path(environment["CHAUMARCHY_TEST_CAPTURE"]).is_file(), (base / "qml.log").read_text())
                     call("create"); wait(lambda s: s["unlocked"] and not s["busy"])
+                    self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["passwordRequired"])
+                    # With no password, a hidden wallet should stop on desktop
+                    # lock and reopen automatically when the desktop unlocks.
+                    self.assertEqual(ipc(ui, "wallet", "hide").returncode, 0)
+                    self.assertEqual(ipc(shell, "lock", "setLocked", "true").returncode, 0)
+                    wait(lambda s: not s["unlocked"] and s["ready"] and not s["safe"])
+                    self.assertEqual(ipc(shell, "lock", "setLocked", "false").returncode, 0)
+                    wait(lambda s: s["unlocked"] and not s["busy"])
+                    self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
                     call("mint"); wait(lambda s: s["mints"] == 1 and not s["busy"])
                     call("invoice"); wait(lambda s: s["hasShare"] and s["hasQr"] and not s["busy"])
                     self.assertEqual(ipc(ui, "wallet", "hide").returncode, 0)
@@ -105,6 +119,7 @@ ShellRoot {
                     self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
                     call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
                     call("confirm"); wait(lambda s: s["hasShare"] and not s["hasReview"] and not s["busy"])
+                    call("protect"); wait(lambda s: s["passwordRequired"] and not s["busy"])
                     call("phrase"); wait(lambda s: s["hasPhrase"] and not s["busy"])
                     self.assertEqual(ipc(shell, "lock", "setLocked", "true").returncode, 0)
                     wait(lambda s: not s["unlocked"] and not s["hasPhrase"] and not s["hasShare"] and s["ready"])

@@ -31,7 +31,7 @@ QtObject {
     }
     function lock() {
         if (preview) return
-        state = {unlocked: false, exists: state.exists, mints: [], selected: null}
+        state = {unlocked: false, exists: state.exists, password_required: state.password_required, mints: [], selected: null}
         busy = false
         ready = false
         error = ""
@@ -71,11 +71,12 @@ QtObject {
                 recoveryPhrase = message.result.phrase
                 phraseTimer.restart()
             }
+            if (message.result && message.result.security_updated) notice = "Security settings updated."
             if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
             if (message.event === "fatal") ready = false
         } catch (_) {
-            error = "Invalid response from the wallet worker."
             lock()
+            error = "Invalid response from the wallet worker."
         }
     }
     property Process worker: Process {
@@ -86,7 +87,7 @@ QtObject {
         // Never forward worker output to QML console logs.
         stderr: SplitParser { onRead: data => {} }
         onExited: {
-            root.state = {unlocked: false, exists: root.state.exists, mints: [], selected: null}
+            root.state = {unlocked: false, exists: root.state.exists, password_required: root.state.password_required, mints: [], selected: null}
             root.ready = false
             root.recoveryPhrase = ""
             root.review = null

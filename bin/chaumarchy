@@ -23,6 +23,11 @@ case ${1:-} in
   *) echo 'Usage: chaumarchy [--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
+# Reopening must not hot-reload a running wallet or interrupt its worker.
+if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet show >/dev/null 2>&1; then
+  exit 0
+fi
+
 for dependency in quickshell inotifywait; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
 done
