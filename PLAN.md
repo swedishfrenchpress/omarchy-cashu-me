@@ -1,126 +1,77 @@
 # Chaumarchy — project plan
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
-**Status: native interface milestone in progress; payment and security specification still being finalized.**
+**Status: first working CDK wallet milestone implemented; controlled payment, recovery, and native lifecycle tests pass. Daily-use readiness remains in progress.**
 
-## Goal
+## Goal and confirmed decisions
 
-Build a lean, native desktop Cashu wallet for personal daily use on Omarchy. Reuse Omarchy's design as much as practical and follow theme changes while the wallet is open. Keep the interface minimal: balance, Send, Receive, History, and essential Settings.
-
-## Confirmed decisions
+A lean, native Cashu wallet for personal use on Omarchy, with the desktop's controls and live theme. Cashu.me is an interaction reference, not a feature checklist.
 
 | Area | Decision |
 | --- | --- |
-| Wallet engine | Cashu Development Kit (CDK), in Rust. The user selected CDK; Coco is no longer under consideration. |
-| Desktop surface | Standalone native app window, not a shell panel or a browser wrapper. |
-| UI direction | Qt/QML using Omarchy's design; the exact component reuse and backend bridge still require investigation. |
-| Theme behavior | Follow Omarchy theme changes live, including relevant typography, spacing, and control styling. |
-| Audience | Personal daily wallet first, hosted in a public repository. Broader distribution is not a first-release requirement. |
-| Payments | Send and redeem Cashu tokens; create and pay Lightning invoices. BOLT11 is the initial invoice target. |
-| Mints | Multiple mints, explicitly selected by the user; no automatic transfers between mints. |
-| Mint suggestions | Minibits, Chorus OFF Mint, Antifiat, and Macadamia; explicit add/selection and a custom-URL option. Verified URLs are recorded in `data/suggested-mints.json` and `docs/mints.md`. |
-| Protection | Password-encrypted wallet; unlock on launch and lock with the desktop. Exact encryption and lifecycle design remain open. |
-| Recovery | Recovery phrase plus mint list, and an encrypted full backup file. |
-| Local project | `~/Documents/github/cashu-wallet` |
-| Project name | Chaumarchy. |
-| Home layout | Selected mint and balance, Send/Receive, recent history below, and a small Settings entry. |
-| QR input | Paste, screen-region scanning, saved-image import, and webcam scanning. |
-| Window close | Keep running and monitor payments in the background; provide a separate Quit action. Monitoring is not implemented in the current preview. |
-| GitHub | Public repository: `swedishfrenchpress/chaumarchy`, created by the user; publish planning before wallet implementation. |
+| Name and repository | Chaumarchy; `swedishfrenchpress/chaumarchy`. Local checkout remains `~/Documents/github/cashu-wallet`. |
+| Engine | Rust CDK, selected by the user over Coco; pinned CDK and cdk-sqlite 0.18.0 with default features disabled. |
+| Native interface | Standalone Quickshell/Qt window importing installed Omarchy Commons and Ui modules. Private pipe to the Rust worker. |
+| Appearance | Use Omarchy controls, typography, spacing, and colors; follow theme replacement without restarting the app. |
+| Home | Selected mint, balance, Send/Receive, recent history, pending invoices/ecash, Settings. |
+| Payments | Cashu tokens and BOLT11 Lightning invoices, in sats, with explicit review and confirmation. |
+| Mints | Multiple explicit mints, separate balances, no automatic transfers. Minibits, Chorus OFF, Antifiat, Macadamia, and custom URLs. |
+| Protection | Password-encrypted SQLCipher database; desktop lock stops the worker and clears sensitive views. |
+| Window lifecycle | Closing keeps an unlocked wallet monitoring in the background. Lock stops it; unlock reconciles; Quit exits. |
+| Recovery | Recovery phrase with mint URLs, plus encrypted full backup with a separate password. No overwrite during restore. |
+| QR input | Paste, screen region, saved image, and webcam. Static QR generation; oversized tokens remain shareable as text. |
 
-Cashu.me is an interaction reference, not a requirement to replicate its complete feature set.
+## Implemented and verified
 
-## Findings that shape the design
+- [x] Establish the public repository and record planning before wallet implementation.
+- [x] Reuse installed Omarchy controls without modifying packaged source.
+- [x] Native preview and atomic dark/light theme replacement while hidden.
+- [x] Encrypted CDK storage, wrong-password rejection, private file permissions, exclusive worker ownership.
+- [x] Four suggested mint URLs verified through public metadata; explicit mint trust and capability checks.
+- [x] Token send/receive, duplicate rejection, review cancellation, and insufficient-funds handling.
+- [x] BOLT11 invoice creation/payment, maximum fee review, history, saved invoices, and QR generation.
+- [x] Unclaimed token reopening and reclaim after worker crash/restart.
+- [x] Recovery after termination while a send awaits confirmation.
+- [x] Independently encrypted full backup, no overwrite, stale-backup reconciliation to current balance.
+- [x] Phrase-plus-mint recovery to the current balance after prior payments.
+- [x] QR image round trip through the actual decoder; screen and camera controls connected.
+- [x] Native UI with real worker: hidden-window automatic receipt, payment review, phrase display, simulated desktop lock clearing, and password unlock.
+- [x] Release build and local desktop installation mechanism.
+- [x] Build/run/recovery documentation and reproducible test-mint instructions.
 
-- The inspected machine runs Omarchy 4.0.2 with Quickshell and Qt 6. Omarchy has QML controls and shared color/style components, rather than only a color palette.
-- The local shared kit is under `/usr/share/omarchy/shell/Ui` and `/usr/share/omarchy/shell/Commons`. These packaged files must not be edited by this project.
-- Active theme files on this installation are under `~/.local/state/omarchy/current/theme`. Shell styling also supports a user override at `~/.config/omarchy/shell.toml`.
-- The shell's color components load theme files at startup and receive runtime theme changes through IPC. Importing the components into a separate app will not alone establish live theme updates. Verify directory replacement, font changes, and user overrides in the integration design.
-- CDK provides wallet and SQLite components and advertises deterministic recovery support. Its APIs and the chosen release must be inspected and pinned before implementation; no runtime-size or performance claims have been validated yet.
-- Seed recovery and full backup restoration are distinct. Seed recovery relies on known mints and their recovery support; a phrase is not a complete history or pending-operation backup. Restoration must reconcile saved data against current mint state.
-- CDK source inspected at commit `1368c131a8f65e08b008e752e0494f895606b17c` (workspace version 0.18.0): `cdk-sqlite` has a `sqlcipher` feature and accepts a database path plus password. It configures WAL, full synchronization, and memory-backed temporary storage. Verify encryption at runtime and failure with an incorrect key; passing a password alone must never be accepted as proof that SQLCipher is enabled.
-- CDK documents calling `recover_incomplete_sagas()` after wallet construction for interrupted swap/send/receive/melt operations. Pending mint quotes require separate reconciliation through `mint_unissued_quotes()`. Recovery requires network access; an unavailable mint must not turn reserved funds into spendable funds.
-- CDK default features include capabilities beyond this wallet. Plan to disable default features and explicitly enable the required wallet and encrypted SQLite features after resolving the release version.
-- Quickshell supports a normal standalone `FloatingWindow` and managed child processes with stdin/stdout communication. A separate Quickshell window plus a Rust/CDK child process is the current architectural recommendation for directly reusing Omarchy's controls. This is not yet a validated integration or a committed implementation choice.
+These checks use disposable wallets and a loopback CDK fake-payment mint. No real funds were used. See [docs/testing.md](docs/testing.md) for commands and test scope.
 
-Sources: [CDK](https://github.com/cashubtc/cdk), [NUT-09 signature restoration](https://github.com/cashubtc/nuts/blob/main/09.md), [NUT-13 deterministic secrets](https://github.com/cashubtc/nuts/blob/main/13.md), and read-only inspection of the installed Omarchy shell.
+## Implementation choices
 
-## Open questions
+The inspected machine uses Omarchy 4.0.2. Shared QML modules are imported from `/usr/share/omarchy/shell`; the launcher prepares private cache symlinks. A parent-directory inotify watch catches atomic theme replacement. Shared components retain their font and shell override behavior.
 
-Resolve these through source inspection where possible, and user discussion for product choices. Do not silently treat suggestions as approved requirements.
+SQLCipher contains CDK's state and versioned app metadata. Runtime encryption is checked before opening the CDK database. Full backups are published only after encrypted export, a persisted recovery requirement, and disk flushing. Restored wallets cannot spend until all known mints reconcile. Seed-only recovery does not promise full history or complete pending-operation recovery.
 
-### Native architecture and desktop integration
+CDK's public prepared-operation APIs handle review, confirmation, and cancellation. Its persisted operation records provide restart recovery and pending token reconstruction. Background reconciliation checks unfinished operations, mint quotes, melts, pending proofs, and spent proofs. General shell IPC never carries wallet secrets.
 
-- Use a standalone Quickshell window with direct imports of installed Omarchy components, and a managed Rust/CDK child process communicating over private stdin/stdout. Keep wallet secrets out of command arguments, environment variables, and general-purpose shell IPC.
-- The initial theme integration watches the active theme's parent directory with `inotifywait`, debounces updates, and reloads Omarchy's shared palette/style objects without application reload. Fonts and user shell overrides use the existing Omarchy watchers. Expand tests for malformed files, fonts, and repeated changes before marking this integration complete.
-- Confirmed desktop-lock behavior: lock with the desktop and reconcile pending payments after wallet unlock. Closing the window alone keeps the unlocked wallet running and monitoring. In-flight operations must persist across both transitions.
-- What measurable startup, idle CPU, memory, and installation-size targets define "lean" on this machine?
+See [docs/architecture.md](docs/architecture.md) for the detailed lifecycle and boundaries.
 
-### Payment experience
+## Next milestone: daily-use readiness
 
-- Agree on the home layout, mint selector, history details, keyboard navigation, and send/receive review screens.
-- QR input methods are selected; decide whether animated QR support is required initially.
-- Onboarding offers the four owner-selected mint suggestions plus a custom URL, with explicit add/selection. Still define unfamiliar mints in received tokens, unsupported capabilities, and removing a mint with funds.
-- Define fees, available versus reserved balance, pending token sharing, reclaim behavior, expired invoices, and uncertain payment outcomes.
-- Confirm first-release boundaries for Lightning addresses, BOLT12, payment requests, on-chain transfers, P2PK, Tor, and protocol URL handling.
+The following work remains explicit; passing the first integration suite does not close these tasks.
 
-### Storage and recovery
+- [ ] Interoperate with Cashu.me or another independent wallet.
+- [ ] Inject network loss before and after mint commits, during Lightning payment, and during restore; verify replay and uncertain outcomes.
+- [ ] Test real-world fees, expired/unsupported invoices, malformed responses, and multiple mints under failure.
+- [ ] Manually validate screen-region, physical webcam, and clipboard behavior.
+- [ ] Review keyboard/accessibility behavior, narrow windows, large histories, fonts, missing/malformed themes, and repeated changes.
+- [ ] Record release startup, idle CPU, memory, and installed-size measurements; choose resource targets using those measurements.
+- [ ] Review dependency advisories and fund-handling/recovery code independently.
+- [ ] Complete the remaining checks before considering a real-funds validation.
 
-- Inspect CDK's persisted operation state, transaction boundaries, counter tracking, and recovery behavior before choosing the storage integration.
-- Choose reviewed encryption and password-derivation dependencies; specify protection of database journals, temporary files, exports, and secrets in memory.
-- Define lock timing, password changes, forgotten-password recovery, backup password handling, and safe behavior during pending payments.
-- Define the versioned full-backup contents and restore process, including stale backups, spent tokens, counters, pending operations, and history.
-- Define supported phrase recovery and known-mint entry, and explain recovery limits without promising full recovery from the phrase alone.
-- Set clipboard and notification behavior for bearer tokens, recovery phrases, balances, and other sensitive data.
+## Deferred scope
 
-### Repository and release
-
-- Preserve the license supplied in the user's repository and check attribution requirements when reusing upstream components.
-- Choose the build and local installation approach after the native architecture is settled.
-- Agree on the validation gate before real funds are used and what requires manual verification.
-
-## Proposed implementation milestones
-
-These are sequencing proposals. Detailed acceptance criteria and GitHub Issues follow after the open decisions are settled.
-
-1. **Finish the specification.** Inspect CDK and Qt integration, agree on user flows and security/recovery behavior, and commit a decision-complete implementation plan.
-2. **Native interface and theme integration.** Build the minimal window with synthetic wallet data. Demonstrate theme changes without losing form state, usable keyboard navigation, and the agreed resource targets.
-3. **Encrypted wallet foundation.** Integrate CDK, persistent state, explicit mint selection, unlocking, and single-instance behavior. Validate persistence and desktop lock behavior.
-4. **Payments and history.** Implement token and BOLT11 flows against a controlled test mint. Verify fees, reservation, reconciliation, and history through failures and restarts.
-5. **Backup and recovery.** Implement encrypted full export/import and phrase-plus-mint recovery. Verify stale backups, wrong passwords, corruption, and interruption without overwriting a working wallet.
-6. **Daily-use readiness.** Complete fault testing, Cashu.me interoperability checks, local installation, and user documentation before the agreed real-funds validation.
-
-## Validation scenarios to preserve
-
-- Sending and receiving tokens; duplicate imports and already-spent tokens; insufficient funds and unfamiliar mints.
-- Lightning invoices paid, expired, rejected, or left uncertain after a timeout; fees and returned change.
-- App termination, network loss, desktop lock, and restart during every payment phase; prevent duplicate spending and false success states.
-- Export and restore after payments; phrase recovery with known mints; corrupted or outdated backups and incorrect passwords.
-- Rapid theme changes, light and dark themes, font scaling, missing theme files, and existing user overrides.
-- No secrets or bearer tokens in logs, repository files, notifications, or unintended temporary files.
-
-## Progress
-
-- [x] Confirm personal-use audience and standalone native window.
-- [x] Choose CDK and initial payment scope.
-- [x] Choose explicit multiple-mint selection, wallet password, and both recovery methods.
-- [x] Inspect the installed Omarchy theme and component structure.
-- [x] Establish this planning record and repository scaffold.
-- [ ] Finish CDK persistence, recovery, and native integration investigation.
-- [ ] Resolve product and security questions with the user.
-- [x] Answer the current product questions: home layout, QR input methods, and behavior when closing the window.
-- [x] Build and visually inspect a standalone native interface preview using installed Omarchy controls.
-- [x] Test atomic theme replacement while hidden, reopening the existing process, and explicit quit in an isolated native test.
-- [x] Confirm desktop-lock behavior and onboarding mint suggestions.
-- [x] Verify all four suggested mints through read-only public metadata requests and record their exact URLs.
-- [ ] Agree on the complete implementation specification.
-- [ ] Create milestone issues from the agreed specification.
-- [ ] Implement and validate the wallet.
+Lightning addresses, BOLT12, on-chain transfers, animated QR, automatic cross-mint transfer, protocol URL registration, in-app password changes, and broader Linux distribution packaging are not implemented. Mint removal and large-history navigation need product/retention decisions before adding destructive controls. These are scope boundaries for this milestone, not claims that the user rejected future support.
 
 ## Planning workflow
 
-Update this file whenever a decision is agreed. Move resolved questions into confirmed decisions, refine milestone acceptance criteria, and commit the change with a descriptive message. Use GitHub Issues for actionable work once the specification is agreed. Keep wallet implementation separate from planning commits.
+This file is the progress tracker. Keep its checkboxes, decisions, and next milestone current alongside commits; README describes the behavior available now. Detailed test evidence belongs in the tests and validation guide. GitHub Issues can be added when a separate issue board becomes useful.
 
 ### Decision history
 
@@ -130,3 +81,5 @@ Update this file whenever a decision is agreed. Move resolved questions into con
 - **2026-09-08:** User named the project Chaumarchy and created `swedishfrenchpress/chaumarchy`. Use that repository and preserve its initial commit and license; retain the requested local folder name `cashu-wallet`.
 - **2026-09-08:** User selected recent history on home, all proposed QR input methods, and continued background monitoring when the window closes. Started the native interface milestone; payment and security questions remain open.
 - **2026-09-08:** User confirmed locking with the desktop and requested Minibits, Chorus OFF Mint, Antifiat, and Macadamia as onboarding suggestions. Verified their public metadata and recorded the catalog; this does not add them to a live wallet.
+
+- **2026-09-09:** User asked to continue building. Implemented the working CDK wallet milestone and controlled tests; retained daily-use validation as an open milestone.

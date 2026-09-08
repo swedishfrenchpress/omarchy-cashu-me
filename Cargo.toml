@@ -1,0 +1,33 @@
+[package]
+name = "chaumarchy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "Native Omarchy Cashu wallet"
+repository = "https://github.com/swedishfrenchpress/chaumarchy"
+
+[[bin]]
+name = "chaumarchy-wallet"
+path = "src/main.rs"
+
+[dependencies]
+cdk = { version = "=0.18.0", default-features = false, features = ["wallet"] }
+cdk-sqlite = { version = "=0.18.0", default-features = false, features = ["wallet", "sqlcipher"] }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher", "backup"] }
+bip39 = { version = "2", features = ["rand", "zeroize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+zeroize = "1"
+url = "2"
+fs2 = "0.4"
+libc = "0.2"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+base64 = "0.22"
+
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"

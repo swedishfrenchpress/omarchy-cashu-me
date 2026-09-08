@@ -1,0 +1,166 @@
+"""End-to-end wallet checks against a local CDK fake-payment mint only.
+
+Start the mint with tests/mint.toml before running this test. Every wallet uses
+temporary storage. Nothing is sent to the onboarding suggestions.
+"""
+import json
+import base64
+import os
+from pathlib import Path
+import select
+import subprocess
+import tempfile
+import time
+import unittest
+import urllib.request
+
+PROJECT = Path(__file__).resolve().parents[1]
+MINT = "http://127.0.0.1:33381"
+PASSWORD = "temporary test wallet password"
+
+
+class Worker:
+    def __init__(self, directory):
+        self.directory = directory
+        self.sequence = 0
+        self.process = subprocess.Popen([str(PROJECT / "target/debug/chaumarchy-wallet")],
+            env=dict(os.environ, CHAUMARCHY_DATA_DIR=str(directory)), stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.read()
+
+    def read(self, timeout=30):
+        ready, _, _ = select.select([self.process.stdout], [], [], timeout)
+        if not ready:
+            raise AssertionError("Wallet worker did not respond in time")
+        line = self.process.stdout.readline()
+        if not line:
+            raise AssertionError("Wallet worker exited unexpectedly")
+        return json.loads(line)
+
+    def call(self, method, **fields):
+        self.sequence += 1
+        request = {"id": self.sequence, "method": method, **fields}
+        self.process.stdin.write((json.dumps(request) + "\n").encode())
+        while True:
+            response = self.read()
+            if response.get("id") == self.sequence:
+                return response
+
+    def ok(self, method, **fields):
+        response = self.call(method, **fields)
+        if "error" in response:
+            raise AssertionError(f"{method}: {response['error']}")
+        return response["result"]
+
+    def state(self):
+        self.ok("status")
+        while True:
+            response = self.read()
+            if response.get("event") == "state":
+                return response["state"]
+
+    def confirm(self, method, **fields):
+        review = self.ok(method, **fields)
+        return self.ok("confirm_payment", review_id=review["review_id"])
+
+    def close(self, kill=False):
+        if self.process.poll() is None:
+            self.process.kill() if kill else self.process.terminate()
+            self.process.wait(timeout=5)
+        for pipe in [self.process.stdin, self.process.stdout, self.process.stderr]:
+            pipe.close()
+
+
+class WalletIntegration(unittest.TestCase):
+    def test_payments_backup_and_crash_recovery(self):
+        with urllib.request.urlopen(MINT + "/v1/info", timeout=3) as response:
+            info = json.load(response)
+        self.assertEqual(info["name"], "Chaumarchy test mint", "Refusing to test against an unidentified mint")
+        workers = []
+        with tempfile.TemporaryDirectory(prefix="chaumarchy-wallet-test-") as temporary:
+            directory = Path(temporary)
+            try:
+                alice = Worker(directory / "alice"); workers.append(alice)
+                bob = Worker(directory / "bob"); workers.append(bob)
+                for worker in [alice, bob]:
+                    worker.ok("create", password=PASSWORD)
+                    worker.ok("add_mint", url=MINT)
+                invoice = alice.ok("create_invoice", amount="128")
+                self.assertTrue(invoice["invoice"].startswith("ln"))
+                self.assertTrue(invoice["qr"].startswith("data:image/svg+xml;base64,"))
+                svg = base64.b64decode(invoice["qr"].split(",", 1)[1])
+                png_path = directory / "invoice.png"
+                subprocess.run(["rsvg-convert", "-o", str(png_path)], input=svg, check=True)
+                scanned = subprocess.run([str(PROJECT / "bin/scan-qr"), "image", str(png_path)], capture_output=True, text=True, check=True)
+                self.assertEqual(json.loads(scanned.stdout)["text"], invoice["invoice"])
+                self.assertEqual(alice.ok("show_invoice", operation_id=invoice["quote_id"])["invoice"], invoice["invoice"])
+                time.sleep(2)
+                alice.ok("sync")
+                self.assertEqual(alice.state()["mints"][0]["spendable"], "128")
+                backup = directory / "before-spending.backup"
+                alice.ok("export_backup", path=str(backup), password="temporary backup password")
+
+                review = alice.ok("send_ecash", amount="16")
+                self.assertEqual(review["review"]["amount"], "16")
+                alice.ok("cancel_payment", review_id=review["review_id"])
+                self.assertEqual(alice.state()["mints"][0]["reserved"], "0")
+                sent = alice.confirm("send_ecash", amount="16")
+                received = bob.confirm("receive_token", text=sent["token"])
+                self.assertEqual(received["amount"], "16")
+                duplicate = bob.ok("receive_token", text=sent["token"])
+                self.assertIn("error", bob.call("confirm_payment", review_id=duplicate["review_id"]))
+                self.assertEqual(bob.state()["mints"][0]["spendable"], "16")
+                alice.ok("sync")
+
+                pending = alice.confirm("send_ecash", amount="8")
+                alice.close(kill=True)
+                alice = Worker(directory / "alice"); workers.append(alice)
+                self.assertIn("error", alice.call("unlock", password="incorrect password"))
+                alice.ok("unlock", password=PASSWORD)
+                alice.ok("sync")
+                reopened = alice.ok("show_pending_token", operation_id=pending["operation_id"])
+                self.assertTrue(reopened["token"].startswith("cashu"))
+                reclaimed = alice.confirm("reclaim_token", operation_id=pending["operation_id"])
+                self.assertEqual(reclaimed["amount"], "8")
+
+                invoice = bob.ok("create_invoice", amount="10")
+                paid = alice.confirm("pay_invoice", text=invoice["invoice"])
+                self.assertTrue(paid["paid"])
+                alice.ok("sync")
+                history = alice.state()["history"]
+                self.assertTrue(any(row["kind"] == "Lightning" and row["status"] == "completed" for row in history))
+                expected = alice.state()["mints"][0]["spendable"]
+                phrase = alice.ok("recovery_phrase")["phrase"]
+                # Termination during review must release the prepared reservation
+                # on recovery, without creating an unconfirmed outgoing token.
+                alice.ok("send_ecash", amount="4")
+                alice.close(kill=True)
+                alice = Worker(directory / "alice"); workers.append(alice)
+                alice.ok("unlock", password=PASSWORD)
+                alice.ok("sync")
+                self.assertEqual(alice.state()["mints"][0]["spendable"], expected)
+                self.assertEqual(alice.state()["mints"][0]["reserved"], "0")
+                alice.close()
+
+                restored = Worker(directory / "restored"); workers.append(restored)
+                restored.ok("restore_backup", path=str(backup), backup_password="temporary backup password", password=PASSWORD)
+                restored.ok("sync")
+                state = restored.state()
+                self.assertFalse(state["restoring"])
+                self.assertEqual(state["mints"][0]["spendable"], expected)
+                restored.close()
+
+                recovered = Worker(directory / "phrase"); workers.append(recovered)
+                self.assertIn("error", recovered.call("restore_phrase", phrase="invalid words", mint_urls=[MINT], password=PASSWORD))
+                recovered.ok("restore_phrase", phrase=phrase, mint_urls=[MINT], password=PASSWORD)
+                recovered.ok("sync")
+                self.assertFalse(recovered.state()["restoring"])
+                self.assertEqual(recovered.state()["mints"][0]["spendable"], expected)
+                self.assertIn("error", recovered.call("send_ecash", amount="99999999"))
+            finally:
+                for worker in workers:
+                    worker.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

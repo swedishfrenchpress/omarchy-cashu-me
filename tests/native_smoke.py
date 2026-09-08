@@ -28,10 +28,11 @@ class NativeSmoke(unittest.TestCase):
             (theme / "shell.toml").write_text("")
             ui = base / "ui"
             shutil.copytree(PROJECT / "ui", ui)
+            shutil.copy(PROJECT / "data/suggested-mints.json", ui / "suggested-mints.json")
             for module in ("Commons", "Ui"):
                 (ui / module).symlink_to(OMARCHY / module, target_is_directory=True)
             environment = dict(os.environ, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
-                               QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic")
+                               QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", CHAUMARCHY_PREVIEW="1")
             environment.pop("WAYLAND_DISPLAY", None)
             environment.pop("DISPLAY", None)
             environment.pop("DBUS_SESSION_BUS_ADDRESS", None)

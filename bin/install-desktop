@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Register this checkout in the user's launcher without system modifications."""
+import os
+from pathlib import Path
+import subprocess
+
+project = Path(__file__).resolve().parents[1]
+if not (project / "target/release/chaumarchy-wallet").is_file():
+    raise SystemExit("Build first: cargo build --release --locked")
+launcher = Path.home() / ".local/bin/chaumarchy"
+applications = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "applications"
+entry = applications / "chaumarchy.desktop"
+marker = "# Managed by Chaumarchy install-desktop\n"
+if (launcher.exists() or launcher.is_symlink()) and not (launcher.is_symlink() and launcher.resolve() == project / "bin/chaumarchy"):
+    raise SystemExit("An unrelated ~/.local/bin/chaumarchy already exists; nothing changed.")
+if entry.exists() and not entry.read_text().startswith(marker):
+    raise SystemExit("An unrelated Chaumarchy desktop entry already exists; nothing changed.")
+# Desktop Exec quoting differs from shell quoting; do not invoke a shell.
+quoted = str(launcher).replace("\\", "\\\\\\\\").replace('"', '\\\\"').replace("`", "\\\\`").replace("$", "\\\\$").replace("%", "%%")
+if "\n" in quoted or "\r" in quoted:
+    raise SystemExit("Unsupported launcher path.")
+launcher.parent.mkdir(parents=True, exist_ok=True)
+applications.mkdir(parents=True, exist_ok=True)
+if not launcher.is_symlink():
+    launcher.symlink_to(project / "bin/chaumarchy")
+entry.write_text(marker + '[Desktop Entry]\nType=Application\nName=Chaumarchy\nComment=Cashu wallet for Omarchy\n'
+    + f'Exec="{quoted}"\nIcon=wallet\nTerminal=false\nCategories=Office;Finance;\nKeywords=Cashu;Bitcoin;Wallet;\n')
+subprocess.run(["desktop-file-validate", str(entry)], check=True)
+print("Installed Chaumarchy in your application launcher.")

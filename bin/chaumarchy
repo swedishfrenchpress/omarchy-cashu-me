@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+project_dir=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
 omarchy_shell=${OMARCHY_PATH:-/usr/share/omarchy}/shell
 runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/ui
+export CHAUMARCHY_BACKEND="$project_dir/target/debug/chaumarchy-wallet"
+if [[ -x $project_dir/target/release/chaumarchy-wallet ]]; then
+  export CHAUMARCHY_BACKEND="$project_dir/target/release/chaumarchy-wallet"
+fi
+export CHAUMARCHY_SCANNER="$project_dir/bin/scan-qr"
+export CHAUMARCHY_PREVIEW=0
+if [[ ${1:-} == "--preview" || ${1:-} == "--check" ]]; then
+  export CHAUMARCHY_PREVIEW=1
+  runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/preview
+fi
+
+# Status and quit must never copy files into a running QML configuration.
+case ${1:-} in
+  --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
+  --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
+  --check|--preview|"") ;;
+  *) echo 'Usage: chaumarchy [--preview|--status|--quit|--check]' >&2; exit 2 ;;
+esac
 
 for dependency in quickshell inotifywait; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
@@ -14,6 +32,7 @@ done
 
 umask 077
 mkdir -p "$runtime_dir"
+cp "$project_dir/data/suggested-mints.json" "$runtime_dir/suggested-mints.json"
 ln -sfn "$omarchy_shell/Commons" "$runtime_dir/Commons"
 ln -sfn "$omarchy_shell/Ui" "$runtime_dir/Ui"
 # Quickshell exposes modules below its config root through the qs.* namespace.
@@ -27,11 +46,17 @@ case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
   --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
   --check) exec quickshell -p "$runtime_dir" ;;
+  --preview) ;;
   "") ;;
-  *) echo 'Usage: chaumarchy [--status|--quit|--check]' >&2; exit 2 ;;
+  *) echo 'Usage: chaumarchy [--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
-# An existing instance owns the window and will eventually own the wallet.
+if [[ $CHAUMARCHY_PREVIEW == 0 && ! -x $CHAUMARCHY_BACKEND ]]; then
+  echo 'Build the wallet worker with cargo build --locked, or use --preview.' >&2
+  exit 1
+fi
+
+# An existing instance owns the window and the wallet worker.
 if quickshell ipc -p "$runtime_dir" call -- wallet show >/dev/null 2>&1; then
   exit 0
 fi
