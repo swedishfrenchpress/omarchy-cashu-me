@@ -1,0 +1,26 @@
+[
+  {
+    "id": "minibits",
+    "name": "Minibits",
+    "url": "https://mint.minibits.cash/Bitcoin",
+    "infoUrl": "https://mint.minibits.cash/Bitcoin/v1/info"
+  },
+  {
+    "id": "chorus-off",
+    "name": "Chorus OFF Mint",
+    "url": "https://mint.chorus.community",
+    "infoUrl": "https://mint.chorus.community/v1/info"
+  },
+  {
+    "id": "antifiat",
+    "name": "Antifiat",
+    "url": "https://antifiat.cash",
+    "infoUrl": "https://antifiat.cash/v1/info"
+  },
+  {
+    "id": "macadamia",
+    "name": "Macadamia",
+    "url": "https://mint.macadamia.cash",
+    "infoUrl": "https://mint.macadamia.cash/v1/info"
+  }
+]

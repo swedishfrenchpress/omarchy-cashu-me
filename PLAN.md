@@ -19,6 +19,7 @@ Build a lean, native desktop Cashu wallet for personal daily use on Omarchy. Reu
 | Audience | Personal daily wallet first, hosted in a public repository. Broader distribution is not a first-release requirement. |
 | Payments | Send and redeem Cashu tokens; create and pay Lightning invoices. BOLT11 is the initial invoice target. |
 | Mints | Multiple mints, explicitly selected by the user; no automatic transfers between mints. |
+| Mint suggestions | Minibits, Chorus OFF Mint, Antifiat, and Macadamia; explicit add/selection and a custom-URL option. Verified URLs are recorded in `data/suggested-mints.json` and `docs/mints.md`. |
 | Protection | Password-encrypted wallet; unlock on launch and lock with the desktop. Exact encryption and lifecycle design remain open. |
 | Recovery | Recovery phrase plus mint list, and an encrypted full backup file. |
 | Local project | `~/Documents/github/cashu-wallet` |
@@ -53,14 +54,14 @@ Resolve these through source inspection where possible, and user discussion for 
 
 - Use a standalone Quickshell window with direct imports of installed Omarchy components, and a managed Rust/CDK child process communicating over private stdin/stdout. Keep wallet secrets out of command arguments, environment variables, and general-purpose shell IPC.
 - The initial theme integration watches the active theme's parent directory with `inotifywait`, debounces updates, and reloads Omarchy's shared palette/style objects without application reload. Fonts and user shell overrides use the existing Omarchy watchers. Expand tests for malformed files, fonts, and repeated changes before marking this integration complete.
-- Confirm desktop-lock behavior with background monitoring. The existing agreed default is to lock with the desktop; closing the window alone does not lock. In-flight operations must persist and reconcile after unlocking.
+- Confirmed desktop-lock behavior: lock with the desktop and reconcile pending payments after wallet unlock. Closing the window alone keeps the unlocked wallet running and monitoring. In-flight operations must persist across both transitions.
 - What measurable startup, idle CPU, memory, and installation-size targets define "lean" on this machine?
 
 ### Payment experience
 
 - Agree on the home layout, mint selector, history details, keyboard navigation, and send/receive review screens.
 - QR input methods are selected; decide whether animated QR support is required initially.
-- Define onboarding and mint trust: initial mint selection, unfamiliar mints in received tokens, unsupported capabilities, and removing a mint with funds.
+- Onboarding offers the four owner-selected mint suggestions plus a custom URL, with explicit add/selection. Still define unfamiliar mints in received tokens, unsupported capabilities, and removing a mint with funds.
 - Define fees, available versus reserved balance, pending token sharing, reclaim behavior, expired invoices, and uncertain payment outcomes.
 - Confirm first-release boundaries for Lightning addresses, BOLT12, payment requests, on-chain transfers, P2PK, Tor, and protocol URL handling.
 
@@ -111,7 +112,8 @@ These are sequencing proposals. Detailed acceptance criteria and GitHub Issues f
 - [x] Answer the current product questions: home layout, QR input methods, and behavior when closing the window.
 - [x] Build and visually inspect a standalone native interface preview using installed Omarchy controls.
 - [x] Test atomic theme replacement while hidden, reopening the existing process, and explicit quit in an isolated native test.
-- [ ] Confirm desktop-lock behavior and onboarding mint selection.
+- [x] Confirm desktop-lock behavior and onboarding mint suggestions.
+- [x] Verify all four suggested mints through read-only public metadata requests and record their exact URLs.
 - [ ] Agree on the complete implementation specification.
 - [ ] Create milestone issues from the agreed specification.
 - [ ] Implement and validate the wallet.
@@ -127,3 +129,4 @@ Update this file whenever a decision is agreed. Move resolved questions into con
 - **2026-09-08:** Authorized repository creation and recording the current plan; wallet implementation remains pending further planning.
 - **2026-09-08:** User named the project Chaumarchy and created `swedishfrenchpress/chaumarchy`. Use that repository and preserve its initial commit and license; retain the requested local folder name `cashu-wallet`.
 - **2026-09-08:** User selected recent history on home, all proposed QR input methods, and continued background monitoring when the window closes. Started the native interface milestone; payment and security questions remain open.
+- **2026-09-08:** User confirmed locking with the desktop and requested Minibits, Chorus OFF Mint, Antifiat, and Macadamia as onboarding suggestions. Verified their public metadata and recorded the catalog; this does not add them to a live wallet.
