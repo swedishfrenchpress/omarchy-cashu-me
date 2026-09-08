@@ -10,6 +10,47 @@ import qs.Ui as Ui
 ShellRoot {
     id: app
     property string page: "home"
+    property var trail: []
+    property string historyFilter: "all"
+    property string historySearch: ""
+    property var transaction: ({})
+    property bool revealShare: false
+    readonly property bool mainPage: ["home", "history", "mints"].indexOf(page) >= 0
+    readonly property var activity: (backend.state.history || []).filter(tx => {
+        var direction = historyFilter === "all" || (historyFilter === "received" ? tx.direction === "Incoming" : tx.direction === "Outgoing")
+        return direction && (tx.kind + " " + tx.status + " " + tx.amount).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
+    })
+    function sats(value) { return String(value || "0").replace(/\B(?=(\d{3})+(?!\d))/g, " ") }
+    function titleFor(tx) { return (tx.kind || "Payment") + (tx.direction === "Incoming" ? " received" : " sent") }
+    function dayFor(tx) { return tx && tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : "" }
+    function go(destination) {
+        if (backend.busy || backend.review) return
+        if (destination === "scan") scanTarget = "payment"
+        trail = trail.concat([page])
+        page = destination
+        backend.error = ""
+    }
+    function tab(destination) {
+        if (backend.busy || backend.review) return
+        trail = []
+        page = destination
+        backend.error = ""
+    }
+    function back() {
+        if (backend.review) { backend.request("cancel_payment", {review_id: backend.reviewId}); return }
+        if (backend.busy) return
+        if (page === "share" || page === "complete") {
+            backend.share = {}; backend.completion = {}; trail = []; page = "home"; return
+        }
+        page = trail.length ? trail[trail.length - 1] : "home"
+        trail = trail.slice(0, -1)
+    }
+    onPageChanged: {
+        contentScroll.contentItem.contentY = 0
+        if (page !== "backup") backend.recoveryPhrase = ""
+        if (page !== "share") { backend.share = {}; app.revealShare = false }
+        if (page !== "scan") scanner.running = false
+    }
     property string paymentText: ""
     property string amountText: ""
     property string mintUrl: ""
@@ -30,11 +71,17 @@ ShellRoot {
     ThemeSync {}
     WalletBackend {
         id: backend
-        onShowResult: app.page = "share"
+        onShowResult: { app.revealShare = false; app.trail = []; app.page = "share" }
+        onPaymentFinished: { app.trail = []; app.page = "complete" }
+        onMintAdded: { app.trail = []; app.page = "home" }
         onReadyChanged: app.maybeOpen()
         onStateChanged: app.maybeOpen()
+        onErrorChanged: if (backend.error) contentScroll.contentItem.contentY = 0
         onLocked: {
             app.page = "home"
+            app.trail = []
+            app.transaction = {}
+            app.revealShare = false
             app.automaticOpenAttempted = false
             app.paymentText = ""
             app.amountText = ""
@@ -107,8 +154,11 @@ ShellRoot {
                     var result = JSON.parse(data)
                     if (result.error) backend.error = result.error
                     else if (backend.unlocked) {
-                        if (app.scanTarget === "send") app.paymentText = result.text
-                        else { app.receiveMethod = "ecash"; app.receiveText = result.text }
+                        if (app.scanTarget === "mint") {
+                            app.mintUrl = result.text.trim(); app.page = "add_mint"
+                        } else if (result.text.trim().startsWith("cashu")) {
+                            app.receiveText = result.text; app.page = "receive_token"
+                        } else { app.paymentText = result.text; app.page = "send" }
                     }
                 } catch (_) { backend.error = "Could not decode the scanned result." }
             }
@@ -146,7 +196,8 @@ ShellRoot {
         color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.body
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
+        textFormat: Text.PlainText
     }
     component Action: Ui.Button {
         focusable: true
@@ -160,8 +211,49 @@ ShellRoot {
         color: Color.foreground
         opacity: 0.15
     }
+    component Entry: Ui.Button {
+        id: entry
+        property string heading: ""
+        property string detail: ""
+        property string trailing: "›"
+        text: ""
+        focusable: true
+        Layout.fillWidth: true
+        implicitHeight: entryContent.implicitHeight + Style.space(24)
+        implicitWidth: Style.space(240)
+        opacity: enabled ? 1 : 0.4
+        Accessible.name: heading + ". " + detail + ". " + trailing
+        RowLayout {
+            id: entryContent
+            anchors.fill: parent
+            anchors.margins: Style.space(12)
+            spacing: Style.space(16)
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                spacing: Style.space(5)
+                Label { text: entry.heading; font.bold: true; Layout.fillWidth: true }
+                Label { visible: entry.detail !== ""; text: entry.detail; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+            }
+            Label { text: entry.trailing; font.pixelSize: Style.font.body; Layout.alignment: Qt.AlignVCenter }
+        }
+    }
+    component MintPicker: Ui.Dropdown {
+        Layout.fillWidth: true
+        enabled: !backend.busy && !backend.review
+        value: backend.state.selected || ""
+        options: (backend.state.mints || []).map(mint => ({value: mint.url, label: mint.name + " · " + app.sats(mint.spendable) + " sats"}))
+        onChanged: value => backend.request("select_mint", {url: value})
+    }
+    component DetailRow: RowLayout {
+        property string heading: ""
+        property string value: ""
+        Layout.fillWidth: true
+        Label { text: parent.heading; opacity: 0.6 }
+        Label { text: parent.value; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+    }
     component ScanButtons: RowLayout {
-        property string target: "send"
+        property string target: app.scanTarget
         Layout.fillWidth: true
         enabled: backend.unlocked && !backend.busy && !scanner.running
         Action { text: "Screen QR"; Layout.fillWidth: true; onClicked: { app.scanTarget = parent.target; app.scan("screen") } }
@@ -179,13 +271,22 @@ ShellRoot {
         color: Color.background
 
         Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-        Shortcut { sequence: "Escape"; onActivated: { if (backend.review) backend.request("cancel_payment", {review_id: backend.reviewId}); else app.page = "home" } }
-        Shortcut { sequence: "Ctrl+Comma"; enabled: !backend.review; onActivated: app.page = "settings" }
+        Shortcut { sequence: "Escape"; onActivated: app.back() }
+        Shortcut { sequence: "Alt+Left"; onActivated: app.back() }
+        Shortcut { sequence: "Ctrl+1"; enabled: app.walletVisible; onActivated: app.tab("home") }
+        Shortcut { sequence: "Ctrl+2"; enabled: app.walletVisible; onActivated: app.tab("history") }
+        Shortcut { sequence: "Ctrl+3"; enabled: app.walletVisible; onActivated: app.tab("mints") }
+        Shortcut { sequence: "Ctrl+Comma"; enabled: !backend.review; onActivated: app.go("settings") }
 
+        Rectangle {
+            id: surface
+            anchors.fill: parent
+            color: Color.background
         Controls.ScrollView {
             id: contentScroll
             anchors.fill: parent
             anchors.margins: Style.space(26)
+            anchors.bottomMargin: navigation.visible ? navigation.height + Style.space(40) : Style.space(26)
             contentWidth: availableWidth
             clip: true
 
@@ -197,12 +298,13 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true
                     Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
+                    Ui.Button { text: "Scan"; visible: app.walletVisible && app.mainPage; enabled: !backend.busy; focusable: true; onClicked: app.go("scan") }
                     Ui.Button {
-                        enabled: !backend.review
+                        enabled: !backend.review && !backend.busy
                         visible: app.walletVisible
-                        text: app.page === "home" ? "Settings" : "Back"
+                        text: app.mainPage ? "Settings" : "← Back"
                         focusable: true
-                        onClicked: app.page = app.page === "home" ? "settings" : "home"
+                        onClicked: app.mainPage ? app.go("settings") : app.back()
                     }
                 }
 
@@ -296,79 +398,93 @@ ShellRoot {
                     Ui.Button { text: "Back"; focusable: true; onClicked: app.restoreMode = false }
                 }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
-                Label { visible: backend.notice !== ""; text: backend.notice; Layout.fillWidth: true }
+                Label { visible: backend.notice !== "" && app.page !== "complete"; text: backend.notice; Layout.fillWidth: true }
                 Label { visible: scanner.running; text: "Scanning… Hold one QR code steady. Scanning stops after one minute."; Layout.fillWidth: true; opacity: 0.65 }
                 Ui.Button { visible: scanner.running; text: "Cancel scan"; focusable: true; onClicked: scanner.running = false }
 
                 ColumnLayout {
                     visible: !!backend.review
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: backend.review ? backend.review.kind : ""; font.bold: true }
-                    Label { text: backend.review ? backend.review.mint : ""; Layout.fillWidth: true; opacity: 0.65 }
-                    Label { text: backend.review && backend.review.amount ? backend.review.amount + " sats" : "Reclaim this unspent transfer?"; font.pixelSize: Style.font.heading }
-                    Label { visible: !!backend.review && !!backend.review.fee; text: backend.review ? "Maximum fees: " + backend.review.fee + " sats" : ""; Layout.fillWidth: true }
-                    Label { visible: !!backend.review && !!backend.review.total; text: backend.review ? "Maximum debit: " + backend.review.total + " sats" : ""; font.bold: true }
-                    Label { visible: !!backend.review && backend.review.receiving === true; text: "The issuing mint may deduct an input fee. The actual credited amount appears after redemption."; Layout.fillWidth: true; opacity: 0.65 }
-                    RowLayout {
+                    spacing: Style.space(22)
+                    Label { text: backend.review ? backend.review.kind : ""; font.pixelSize: Style.font.heading; font.bold: true }
+                    Label { text: backend.review && backend.review.amount ? app.sats(backend.review.amount) + " sats" : "Reclaim unspent ecash"; font.pixelSize: Style.space(36); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Divider {}
+                    DetailRow { heading: "Mint"; value: backend.review ? backend.review.mint : "" }
+                    DetailRow { visible: !!backend.review && !!backend.review.fee; heading: "Maximum fee"; value: backend.review ? app.sats(backend.review.fee) + " sats" : "" }
+                    DetailRow { visible: !!backend.review && !!backend.review.total; heading: "Maximum total"; value: backend.review ? app.sats(backend.review.total) + " sats" : "" }
+                    Label { visible: !!backend.review && backend.review.receiving === true; text: "The mint may deduct an input fee. You will see the amount received after redemption."; Layout.fillWidth: true; opacity: 0.65 }
+                    Action {
+                        id: confirmButton
+                        text: backend.busy ? "Processing…" : (!backend.review ? "Confirm" : backend.review.reclaim ? "Reclaim ecash" : backend.review.receiving ? "Receive ecash" : backend.review.kind === "Send ecash" ? "Create token" : "Pay invoice")
+                        enabled: !backend.busy
                         Layout.fillWidth: true
-                        Action { text: "Cancel"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
-                        Action { text: backend.busy ? "Processing…" : "Confirm"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("confirm_payment", {review_id: backend.reviewId}) }
+                        onClicked: backend.request("confirm_payment", {review_id: backend.reviewId})
                     }
+                    Ui.Button { text: "Cancel"; focusable: true; enabled: !backend.busy; Layout.alignment: Qt.AlignHCenter; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
                 }
-
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "home"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
-                    Ui.Dropdown {
-                        visible: (backend.state.mints || []).length > 0
-                        Layout.fillWidth: true
-                        value: backend.state.selected || ""
-                        options: (backend.state.mints || []).map(mint => ({value: mint.url, label: mint.name}))
-                        onChanged: value => backend.request("select_mint", {url: value})
-                    }
-                    Label { visible: !(backend.state.mints || []).length; text: "Your wallet is ready. Choose a mint to start using ecash."; Layout.fillWidth: true; opacity: 0.6 }
-                    Action { visible: !(backend.state.mints || []).length; text: "Choose a mint"; Layout.fillWidth: true; onClicked: app.page = "settings" }
-                    Label { visible: backend.state.restoring === true; text: "Recovering from your mints… Spending becomes available after recovery completes. Unreachable mints are retried in the background."; Layout.fillWidth: true; opacity: 0.65 }
-                    Label { visible: app.selectedMint.sync === "retrying"; text: "Mint sync needs another attempt. Displayed balances may be out of date."; Layout.fillWidth: true; opacity: 0.65 }
-                    RowLayout {
-                        spacing: Style.space(10)
-                        Label { text: app.selectedMint.spendable; font.pixelSize: Style.space(60) }
-                        Label { text: "sats"; opacity: 0.6; Layout.alignment: Qt.AlignBaseline }
-                    }
-                    Label {
-                        visible: app.selectedMint.pending !== "0" || app.selectedMint.reserved !== "0"
-                        text: app.selectedMint.pending + " pending · " + app.selectedMint.reserved + " reserved"
-                        opacity: 0.6
-                    }
+                    Item { Layout.preferredHeight: Style.space(10) }
+                    Ui.Button { text: app.selectedMint.name + "  ⌄"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.go("mints") }
+                    Label { text: app.sats(app.selectedMint.spendable); font.pixelSize: Style.space(54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: backend.state.restoring === true; text: "Recovering from your mints…"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
+                    Label { visible: app.selectedMint.sync === "retrying"; text: "Mint unavailable. Balance may be out of date."; Layout.fillWidth: true; opacity: 0.6 }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.space(12)
-                        Action { text: "↑  Send"; Layout.fillWidth: true; onClicked: app.page = "send" }
-                        Action { text: "↓  Receive"; Layout.fillWidth: true; onClicked: app.page = "receive" }
+                        Action { text: "↓  Receive"; Layout.fillWidth: true; onClicked: app.go("receive") }
+                        Action { text: "↑  Send"; Layout.fillWidth: true; onClicked: app.go("send") }
                     }
+                    Entry { visible: !(backend.state.mints || []).length; heading: "Choose your first mint"; detail: "A mint issues and redeems your ecash."; onClicked: app.go("add_mint") }
+                    Entry { visible: app.selectedMint.pending !== "0" || app.selectedMint.reserved !== "0"; heading: "Pending activity"; detail: app.sats(app.selectedMint.pending) + " pending · " + app.sats(app.selectedMint.reserved) + " reserved"; onClicked: app.tab("history") }
                     Divider {}
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "History"; font.bold: true; Layout.fillWidth: true }
-                        Ui.Button { text: "Refresh"; enabled: backend.unlocked && !backend.busy; focusable: true; onClicked: backend.request("sync") }
-                    }
-                    Item { Layout.preferredHeight: Style.space(24) }
-                    Label { visible: !(backend.state.history || []).length; text: "Your payments will appear here."; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
+                    Label { visible: !(backend.state.history || []).length; text: "No payments yet"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Repeater {
-                        model: backend.state.history || []
-                        delegate: RowLayout {
+                        model: (backend.state.history || []).slice(0, 3)
+                        delegate: Entry {
                             required property var modelData
-                            Layout.fillWidth: true
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Label { text: modelData.kind + " · " + modelData.status }
-                                Label { text: new Date(modelData.timestamp * 1000).toLocaleString(); opacity: 0.55; font.pixelSize: Style.font.caption }
-                            }
-                            Label { text: (modelData.direction === "Incoming" ? "+" : "−") + modelData.amount + " sats" }
+                            heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
+                            detail: app.dayFor(modelData) + " · " + modelData.status
+                            trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.sats(modelData.amount) + " sats"
+                            onClicked: { app.transaction = Object.assign({mint: app.selectedMint.url}, modelData); app.go("transaction") }
                         }
                     }
+                    Ui.Button { text: "View all activity  ›"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "history"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
+                    RowLayout { Layout.fillWidth: true; Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true } Ui.Button { text: "Refresh"; focusable: true; enabled: !backend.busy; onClicked: backend.request("sync") } }
+                    MintPicker {}
+                    Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Repeater { model: [{id:"all", name:"All"}, {id:"received", name:"Received"}, {id:"sent", name:"Sent"}]
+                            delegate: Ui.Button { required property var modelData; Layout.fillWidth: true; text: modelData.name; selected: app.historyFilter === modelData.id; focusable: true; onClicked: app.historyFilter = modelData.id }
+                        }
+                    }
+                    Label { visible: !app.activity.length; text: "No matching activity"; opacity: 0.6 }
+                    Repeater {
+                        model: app.activity
+                        delegate: ColumnLayout {
+                            required property var modelData
+                            required property int index
+                            Layout.fillWidth: true
+                            Label { visible: index === 0 || app.dayFor(modelData) !== app.dayFor(app.activity[index - 1]); text: app.dayFor(modelData); opacity: 0.55; font.pixelSize: Style.font.caption }
+                            Entry {
+                                heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
+                                detail: modelData.status
+                                trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.sats(modelData.amount) + " sats"
+                                onClicked: { app.transaction = Object.assign({mint: app.selectedMint.url}, modelData); app.go("transaction") }
+                            }
+                        }
+                    }
+                    Label { text: "Showing up to 100 recent payments for this mint."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
                     Label { visible: (backend.state.pending_invoices || []).length > 0; text: "Pending invoices"; font.bold: true }
                     Repeater {
                         model: backend.state.pending_invoices || []
@@ -382,136 +498,191 @@ ShellRoot {
                     Label { visible: (backend.state.pending_sends || []).length > 0; text: "Unclaimed ecash"; font.bold: true }
                     Repeater {
                         model: backend.state.pending_sends || []
-                        delegate: RowLayout {
+                        delegate: ColumnLayout {
                             required property var modelData
                             Layout.fillWidth: true
+                            Label { text: modelData.amount ? app.sats(modelData.amount) + " sats · pending ecash" : "Pending ecash"; Layout.fillWidth: true }
+                            RowLayout { Layout.fillWidth: true
                             Action { text: "Show token"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("show_pending_token", {operation_id: modelData.id}) }
                             Action { text: "Reclaim"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("reclaim_token", {operation_id: modelData.id}) }
+                            }
                         }
                     }
-                    Item { Layout.preferredHeight: Style.space(36) }
-                }
 
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "transaction"
+                    Layout.fillWidth: true
+                    spacing: Style.space(22)
+                    Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: app.sats(app.transaction.amount) + " sats"; font.pixelSize: Style.space(38); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    DetailRow { heading: "Status"; value: app.transaction.status || "" }
+                    DetailRow { heading: "Fee"; value: app.sats(app.transaction.fee) + " sats" }
+                    DetailRow { heading: "Date"; value: app.transaction.timestamp ? new Date(app.transaction.timestamp * 1000).toLocaleString() : "" }
+                    DetailRow { heading: "Mint"; value: app.transaction.mint || "" }
+                    Divider {}
+                    Label { text: "Transfer reference"; opacity: 0.6 }
+                    Label { text: app.transaction.id || ""; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "send"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
+                    spacing: Style.space(22)
                     Label { text: "Send"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Label { text: "Paste a Lightning invoice, or choose an amount to share as ecash."; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.TextField {
-                        Layout.fillWidth: true
-                        placeholderText: "Lightning invoice"
-                        text: app.paymentText
-                        onTextEdited: app.paymentText = text
-                    }
-                    Ui.TextField {
-                        Layout.fillWidth: true
-                        placeholderText: "Amount in sats"
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        validator: RegularExpressionValidator { regularExpression: /[0-9]{0,12}/ }
-                        text: app.amountText
-                        onTextEdited: app.amountText = text
-                    }
-                    Label { text: "QR input"; font.bold: true }
-                    ScanButtons { target: "send" }
-                    Action {
-                        text: backend.busy ? "Preparing…" : "Review payment"
-                        enabled: backend.unlocked && !backend.busy && (app.paymentText.length > 0 || app.amountText.length > 0)
-                        Layout.fillWidth: true
-                        onClicked: backend.request(app.paymentText.trim() ? "pay_invoice" : "send_ecash", {text: app.paymentText, amount: app.amountText})
-                    }
+                    Ui.TextField { id: invoiceInput; Layout.fillWidth: true; placeholderText: "Paste a Lightning invoice"; text: app.paymentText; onTextEdited: app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
+                    Action { id: invoiceReview; visible: app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
+                    Entry { heading: "Scan a payment"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
+                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.amountText = ""; app.go("send_amount") } }
+                    Entry { visible: !backend.state.selected; heading: "Choose a mint first"; onClicked: app.go("mints") }
                 }
-
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "receive"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
+                    spacing: Style.space(22)
                     Label { text: "Receive"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Ui.Dropdown {
-                        Layout.fillWidth: true
-                        value: app.receiveMethod
-                        options: [{value: "lightning", label: "Lightning invoice"}, {value: "ecash", label: "Cashu token"}]
-                        onChanged: value => app.receiveMethod = value
-                    }
+                    Entry { id: lightningChoice; heading: "Lightning"; detail: "Create an invoice to receive from another wallet."; onClicked: { app.receiveText = ""; app.go("receive_amount") } }
+                    Entry { heading: "Ecash"; detail: "Redeem a Cashu token someone sent you."; onClicked: { app.receiveText = ""; app.go("receive_token") } }
+                    Entry { heading: "Scan a token"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && (app.page === "send_amount" || app.page === "receive_amount")
+                    Layout.fillWidth: true
+                    spacing: Style.space(24)
+                    Label { text: app.page === "send_amount" ? "Send ecash" : "Receive Lightning"; font.pixelSize: Style.font.heading; font.bold: true }
+                    MintPicker {}
+                    Label { text: app.sats(app.selectedMint.spendable) + " sats available"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Item { Layout.preferredHeight: Style.space(16) }
                     Ui.TextField {
+                        id: amountInput
                         Layout.fillWidth: true
-                        placeholderText: app.receiveMethod === "lightning" ? "Amount in sats" : "Paste Cashu token"
-                        text: app.receiveText
-                        onTextEdited: app.receiveText = text
+                        placeholderText: "0"
+                        horizontalAlignment: TextInput.AlignHCenter
+                        font.pixelSize: Style.space(46)
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        validator: RegularExpressionValidator { regularExpression: /[0-9]{0,16}/ }
+                        text: app.page === "send_amount" ? app.amountText : app.receiveText
+                        onTextEdited: { if (app.page === "send_amount") app.amountText = text; else app.receiveText = text }
+                        onAccepted: if (amountContinue.enabled) amountContinue.clicked()
                     }
-                    Label {
-                        text: app.receiveMethod === "lightning" ? "Create an invoice to pay from another Lightning wallet." : "Redeem a token with its issuing mint."
-                        opacity: 0.65
-                        Layout.fillWidth: true
-                    }
-                    ScanButtons { target: "receive"; visible: app.receiveMethod === "ecash" }
+                    Label { text: "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: app.page === "send_amount" ? "Review the amount and any fees before creating your token." : "Share the invoice with the person paying you."; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Action {
-                        text: backend.busy ? "Preparing…" : (app.receiveMethod === "lightning" ? "Create invoice" : "Review token")
-                        enabled: backend.unlocked && !backend.busy && app.receiveText.length > 0
+                        id: amountContinue
+                        text: backend.busy ? "Preparing…" : app.page === "send_amount" ? "Review ecash" : "Create invoice"
                         Layout.fillWidth: true
-                        onClicked: backend.request(app.receiveMethod === "lightning" ? "create_invoice" : "receive_token", {text: app.receiveText, amount: app.receiveText})
+                        enabled: backend.unlocked && !backend.busy && !!backend.state.selected && /[1-9]/.test(app.page === "send_amount" ? app.amountText : app.receiveText)
+                        onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", {amount: app.page === "send_amount" ? app.amountText : app.receiveText})
                     }
                 }
-
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "receive_token"
+                    Layout.fillWidth: true
+                    spacing: Style.space(22)
+                    Label { text: "Receive ecash"; font.pixelSize: Style.font.heading; font.bold: true }
+                    Ui.TextField { Layout.fillWidth: true; placeholderText: "Paste a Cashu token"; text: app.receiveText; onTextEdited: app.receiveText = text }
+                    Label { text: "The token is redeemed with its issuing mint. Add an unfamiliar mint before receiving its ecash."; Layout.fillWidth: true; opacity: 0.6 }
+                    Action { text: backend.busy ? "Preparing…" : "Review token"; Layout.fillWidth: true; enabled: backend.unlocked && !backend.busy && app.receiveText.trim() !== ""; onClicked: backend.request("receive_token", {text: app.receiveText}) }
+                    Ui.Button { text: "Scan instead"; focusable: true; onClicked: app.go("scan") }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "scan"
+                    Layout.fillWidth: true
+                    spacing: Style.space(22)
+                    Label { text: "Scan a QR code"; font.pixelSize: Style.font.heading; font.bold: true }
+                    Label { text: app.scanTarget === "mint" ? "Scan a mint URL, then review it before adding." : "Lightning invoices and Cashu tokens are recognized automatically."; Layout.fillWidth: true; opacity: 0.6 }
+                    ScanButtons {}
+                }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "share"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: backend.share.token ? "Share ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { visible: !!backend.share.expiry; text: "Expires " + new Date((backend.share.expiry || 0) * 1000).toLocaleString(); Layout.fillWidth: true; opacity: 0.65 }
-                    Label { visible: !!backend.share.token && !backend.share.qr; text: "This token is too large for one QR code. Use Copy to share it."; Layout.fillWidth: true }
-                    Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(300, window.width - 64); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
-                    Controls.TextArea {
-                        Layout.fillWidth: true
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.WrapAnywhere
-                        text: backend.share.token || backend.share.invoice || ""
-                        color: Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        background: Rectangle { color: "transparent" }
-                    }
+                    spacing: Style.space(20)
+                    Label { text: backend.share.token ? "Pending ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
+                    Label { text: app.sats(backend.share.amount) + " sats"; visible: !!backend.share.amount; font.pixelSize: Style.space(32); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    DetailRow { heading: "Mint"; value: backend.share.mint || app.selectedMint.name }
+                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: new Date((backend.share.expiry || 0) * 1000).toLocaleString() }
+                    Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
-                        text: "Copy"
+                        text: clipboard.running ? "Copied · waiting for paste" : backend.share.token ? "Copy token" : "Copy invoice"
                         enabled: !clipboard.running
                         Layout.fillWidth: true
-                        onClicked: {
-                            app.clipboardText = backend.share.token || backend.share.invoice || ""
-                            clipboard.stdinEnabled = true
-                            clipboard.running = true
+                        onClicked: { app.clipboardText = backend.share.token || backend.share.invoice || ""; clipboard.stdinEnabled = true; clipboard.running = true }
+                    }
+                    Ui.Button { text: app.revealShare ? "Hide text" : "Show full text"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.revealShare = !app.revealShare }
+                    Controls.TextArea {
+                        visible: app.revealShare
+                        Layout.fillWidth: true; readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
+                        text: backend.share.token || backend.share.invoice || ""; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption
+                        background: Rectangle { color: "transparent" }
+                    }
+                    Label { text: backend.share.token ? "Anyone holding this token can redeem it. Reopen or reclaim it from History." : "You can close this window. Your unlocked wallet keeps checking for payment."; opacity: 0.6; Layout.fillWidth: true }
+                    Ui.Button { text: "Done"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.back() }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "complete"
+                    Layout.fillWidth: true
+                    spacing: Style.space(24)
+                    Item { Layout.preferredHeight: Style.space(36) }
+                    Label { text: "✓"; font.pixelSize: Style.space(42); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: backend.completion.paid ? "Payment sent" : backend.completion.reclaimed ? "Ecash reclaimed" : "Payment received"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: app.sats(backend.completion.amount) + " sats"; font.pixelSize: Style.space(40); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Action { text: "Back to wallet"; Layout.fillWidth: true; onClicked: app.back() }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "mints"
+                    Layout.fillWidth: true
+                    spacing: Style.space(18)
+                    Label { text: "Mints"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Repeater {
+                        model: backend.state.mints || []
+                        delegate: Entry {
+                            required property var modelData
+                            heading: modelData.name
+                            detail: modelData.url + (modelData.sync === "retrying" ? " · unavailable" : "")
+                            trailing: app.sats(modelData.spendable) + " sats" + (modelData.url === backend.state.selected ? " ✓" : "")
+                            selected: modelData.url === backend.state.selected
+                            enabled: !backend.busy
+                            onClicked: { backend.request("select_mint", {url: modelData.url}); app.page = "home"; app.trail = [] }
                         }
                     }
-                    Label { text: backend.share.token ? "Anyone with this token can redeem it. You can reopen unclaimed tokens from History." : "Payment will be checked in the background while your wallet is unlocked."; opacity: 0.65; Layout.fillWidth: true }
-                    Action { text: "Done"; Layout.fillWidth: true; onClicked: { backend.share = {}; app.page = "home" } }
+                    Entry { heading: "+  Add a mint"; detail: "Choose a suggestion or use a mint URL."; onClicked: app.go("add_mint") }
+                    Label { text: "Each mint holds a separate balance. Choose one to view its activity and make payments."; opacity: 0.6; Layout.fillWidth: true }
                 }
-
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "add_mint"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
+                    Label { text: "Add a mint"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: "SUGGESTED"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                    Repeater {
+                        model: app.suggestions
+                        delegate: Entry { required property var modelData; heading: modelData.name; detail: modelData.url; trailing: app.mintUrl === modelData.url ? "✓" : "›"; selected: app.mintUrl === modelData.url; onClicked: app.mintUrl = modelData.url }
+                    }
+                    Ui.TextField { id: mintInput; Layout.fillWidth: true; placeholderText: "Or enter a mint URL"; text: app.mintUrl; onTextEdited: app.mintUrl = text }
+                    Ui.Button { text: "Scan mint URL"; focusable: true; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
+                    Label { text: "Adding a mint means trusting its operator to redeem your ecash."; opacity: 0.6; Layout.fillWidth: true }
+                    Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
+                    Ui.Button { text: "View my mints"; focusable: true; onClicked: app.tab("mints") }
+                }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "settings"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: "Settings"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Label { text: "Mints"; font.bold: true }
-                    Ui.Dropdown {
-                        Layout.fillWidth: true
-                        value: ""
-                        options: [{value: "", label: "Choose a suggested mint…"}].concat(app.suggestions.map(mint => ({value: mint.url, label: mint.name})))
-                        onChanged: value => app.mintUrl = value
-                    }
-                    Ui.TextField {
-                        Layout.fillWidth: true
-                        placeholderText: "https://mint.example.com"
-                        text: app.mintUrl
-                        onTextEdited: app.mintUrl = text
-                    }
-                    Label { text: "Adding a mint means trusting its operator to redeem your ecash."; opacity: 0.6; Layout.fillWidth: true }
-                    Action {
-                        text: backend.busy ? "Checking mint…" : "Trust and add mint"
-                        enabled: backend.unlocked && !backend.busy && app.mintUrl.length > 0
-                        Layout.fillWidth: true
-                        onClicked: backend.request("add_mint", {url: app.mintUrl})
-                    }
+                    spacing: Style.space(18)
+                    Label { text: "Settings"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: "WALLET"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                    Entry { heading: "Backup & recovery"; detail: "Recovery words and encrypted backups"; onClicked: app.go("backup") }
+                    Entry { heading: "Security"; detail: backend.state.password_required ? "Password protection on" : "Password protection off"; onClicked: app.go("security") }
+                    Entry { heading: "Mints"; detail: (backend.state.mints || []).length + " added"; onClicked: app.go("mints") }
                     Divider {}
+                    Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
+                    Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked; Layout.fillWidth: true; onClicked: backend.lock() }
+                    Ui.Button { text: "Quit Chaumarchy"; focusable: true; onClicked: Qt.quit() }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "security"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
                     Label { text: "Security"; font.bold: true }
                     Label {
                         text: backend.state.password_required ? "Password protection is on. Your wallet locks with the desktop."
@@ -538,6 +709,12 @@ ShellRoot {
                         onClicked: { backend.request("remove_password", {password: currentPassword.text}); currentPassword.clear() }
                     }
                     Divider {}
+
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "backup"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
                     Label { text: "Backup & recovery"; font.bold: true }
                     Action { text: "Show recovery phrase"; enabled: backend.unlocked && !backend.busy; Layout.fillWidth: true; onClicked: backend.request("recovery_phrase") }
                     Label { visible: backend.recoveryPhrase !== ""; text: backend.recoveryPhrase; Layout.fillWidth: true; font.bold: true }
@@ -554,20 +731,33 @@ ShellRoot {
                     }
                     Label { text: "Full backup restore is available when setting up a new wallet. It never overwrites an existing wallet."; opacity: 0.65; Layout.fillWidth: true }
                     Divider {}
-                    Label { text: "Closing the window keeps Chaumarchy running. Open it again with the launcher."; opacity: 0.65; Layout.fillWidth: true }
-                    Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked; Layout.fillWidth: true; onClicked: backend.lock() }
-                    Action { text: "Quit Chaumarchy"; Layout.fillWidth: true; onClicked: Qt.quit() }
+
                 }
 
-                Divider {}
+                Divider { visible: app.walletVisible && app.page === "settings" }
                 Label {
-                    visible: app.walletVisible
+                    visible: app.walletVisible && app.page === "settings"
                     text: backend.preview ? "Interface preview · wallet actions are disabled." : "Development build · validation in progress."
                     font.pixelSize: Style.font.caption
                     opacity: 0.55
                     Layout.fillWidth: true
                 }
             }
+        }
+        RowLayout {
+            id: navigation
+            visible: app.walletVisible && app.mainPage && !backend.review
+            anchors.bottom: parent.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottomMargin: Style.space(14)
+            width: Math.min(parent.width - Style.space(52), Style.space(460))
+            height: Style.space(42)
+            spacing: Style.space(12)
+            Repeater {
+                model: [{id:"home", label:"Wallet"}, {id:"history", label:"History"}, {id:"mints", label:"Mints"}]
+                delegate: Ui.Button { required property var modelData; text: modelData.label; selected: app.page === modelData.id; focusable: true; Layout.fillWidth: true; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
+            }
+        }
         }
     }
 }

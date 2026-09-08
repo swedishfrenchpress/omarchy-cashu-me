@@ -212,7 +212,7 @@ async fn main() {
                         None => Err("Unlock the wallet first.")
                     },
                     "add_mint" => match session.as_mut() {
-                        Some(session) => session.add_mint(&request.url).await.map(|_| json!({})),
+                        Some(session) => session.add_mint(&request.url).await.map(|_| json!({"mint_added":true})),
                         None => Err("Unlock the wallet first.")
                     },
                     "select_mint" => match session.as_mut() {

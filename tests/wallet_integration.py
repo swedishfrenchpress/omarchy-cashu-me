@@ -120,6 +120,8 @@ class WalletIntegration(unittest.TestCase):
                 alice.ok("sync")
                 reopened = alice.ok("show_pending_token", operation_id=pending["operation_id"])
                 self.assertTrue(reopened["token"].startswith("cashu"))
+                self.assertEqual(reopened["amount"], "8")
+                self.assertEqual(reopened["mint"], MINT)
                 reclaimed = alice.confirm("reclaim_token", operation_id=pending["operation_id"])
                 self.assertEqual(reclaimed["amount"], "8")
 

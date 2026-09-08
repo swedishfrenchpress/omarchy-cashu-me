@@ -373,6 +373,7 @@ impl Session {
         let mut history = Vec::new();
         let mut pending_sends = Vec::new();
         let mut pending_invoices = Vec::new();
+        let mut issued_invoices = Vec::new();
         if let Ok(wallet) = self.selected_wallet() {
             for quote in self
                 .db
@@ -382,9 +383,12 @@ impl Session {
             {
                 if quote.mint_url == wallet.mint_url
                     && quote.payment_method == PaymentMethod::BOLT11
-                    && quote.state != cdk::nuts::MintQuoteState::Issued
                 {
-                    pending_invoices.push(json!({"id":quote.id,"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}));
+                    if quote.state == cdk::nuts::MintQuoteState::Issued {
+                        issued_invoices.push(json!({"id":quote.id,"mint":quote.mint_url.to_string(),"amount":quote.amount_issued.to_string()}));
+                    } else {
+                        pending_invoices.push(json!({"id":quote.id,"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}));
+                    }
                 }
             }
             let transactions = wallet
@@ -401,12 +405,23 @@ impl Session {
                 .await
                 .map_err(|_| "Cannot read pending sends.")?
             {
-                pending_sends.push(json!({"id":id.to_string()}));
+                let amount = self
+                    .db
+                    .get_saga(&id)
+                    .await
+                    .map_err(|_| "Cannot read pending transfer.")?
+                    .and_then(|saga| match saga.data {
+                        cdk::wallet::types::OperationData::Send(data) => {
+                            Some(data.amount.to_string())
+                        }
+                        _ => None,
+                    });
+                pending_sends.push(json!({"id":id.to_string(),"amount":amount}));
             }
         }
         Ok(
             json!({"unlocked":true,"exists":true,"mints":mints,"selected":self.settings.selected,
-            "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"restoring":self.settings.needs_restore}),
+            "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"issued_invoices":issued_invoices,"restoring":self.settings.needs_restore}),
         )
     }
 
@@ -439,7 +454,7 @@ impl Session {
         .map_err(|_| "Invoice request timed out. Check pending invoices before retrying.")?
         .map_err(|_| "Mint could not create this invoice. Check its limits and availability.")?;
         Ok(
-            json!({"invoice":quote.request,"quote_id":quote.id,"amount":amount.to_string(),"expiry":quote.expiry}),
+            json!({"invoice":quote.request,"quote_id":quote.id,"mint":wallet.mint_url.to_string(),"amount":amount.to_string(),"expiry":quote.expiry}),
         )
     }
 
@@ -463,7 +478,12 @@ impl Session {
         if let cdk::wallet::types::OperationData::Send(data) = saga.data {
             let proofs = data.proofs.ok_or("Pending transfer has no saved proofs.")?;
             let token = Token::new(saga.mint_url, proofs, None, CurrencyUnit::Sat);
-            return Ok(json!({"token":token.to_string(),"operation_id":input}));
+            let amount = token
+                .value()
+                .map_err(|_| "Cannot read pending token amount.")?;
+            return Ok(
+                json!({"token":token.to_string(),"operation_id":input,"amount":amount.to_string(),"mint":wallet.mint_url.to_string()}),
+            );
         }
         Err("This is not an ecash send.")
     }
@@ -480,7 +500,7 @@ impl Session {
             return Err("This invoice does not belong to the selected mint.");
         }
         Ok(
-            json!({"invoice":quote.request,"quote_id":quote.id,"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}),
+            json!({"invoice":quote.request,"quote_id":quote.id,"mint":wallet.mint_url.to_string(),"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}),
         )
     }
 

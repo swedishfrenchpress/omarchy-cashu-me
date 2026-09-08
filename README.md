@@ -28,12 +28,14 @@ Closing the window keeps the unlocked wallet monitoring payments every 30 second
 ## Using the wallet
 
 1. Start with the animated introduction and choose Create wallet. No password or account is required. You can also restore a backup or use recovery words and mint URLs.
-2. In Settings, explicitly add a suggested mint or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
+2. In Mints, explicitly add a suggested mint or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
 3. Receive by creating a BOLT11 Lightning invoice or redeeming a Cashu token. Paste tokens, scan a screen region, import a QR image, or use a webcam.
-4. Send by entering an ecash amount or a BOLT11 invoice. Review the mint, amount, and maximum fee/debit before confirmation.
-5. Home shows the selected mint's balance, recent history, saved pending invoices, and unclaimed ecash. Reopen a token to share it again, or reclaim it if it remains unspent.
+4. Send by pasting a BOLT11 invoice or choosing Send ecash and entering an amount. Review the mint, amount, and maximum fee/debit before confirmation.
+5. Wallet shows the selected mint and recent payments. History provides filters, payment details, pending invoices, and unclaimed ecash. Mints lists each balance separately. Reopen a token to share it again, or reclaim it if it remains unspent.
 
 Balances stay separate by mint. A token from an unfamiliar mint requires explicitly adding that mint first. This version uses sats and static QR codes. Large tokens can be copied as text. Lightning addresses, BOLT12, on-chain transfers, animated QR, and automatic transfers between mints are outside this milestone.
+
+Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and Escape or Alt+Left to go back. Payment confirmation remains explicit.
 
 ## Optional password
 
@@ -61,7 +63,8 @@ Never commit wallet state, bearer tokens, passwords, recovery phrases, or backup
 
 - [Cashu](https://cashu.space/) and [protocol specifications](https://github.com/cashubtc/nuts)
 - [Cashu Development Kit](https://github.com/cashubtc/cdk), pinned to 0.18.0
-- [Cashu.me](https://github.com/cashubtc/cashu.me), interaction reference
+- [Cashu Wallet](https://github.com/cashubtc/wallet), primary UX reference
+- [Cashu.me](https://github.com/cashubtc/cashu.me), interoperability target
 - [Omarchy](https://omarchy.org/), installed native component kit
 
 Chaumarchy is MIT licensed; see [LICENSE](LICENSE). Upstream components retain their respective licenses. The launcher imports installed Omarchy modules; it does not redistribute their source.

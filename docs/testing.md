@@ -58,3 +58,5 @@ Passing the local tests is a development milestone; it does not establish produc
 On the development machine, Rust 1.98.0 produced a stripped release worker of 16,282,032 bytes (15.5 MiB). With the native setup screen visible and no wallet unlocked, the worker used about 6.6 MiB RSS. The UI used about 170 MiB RSS / 84 MiB PSS; shared Qt libraries contribute to RSS. A five-second idle UI CPU sample rounded to 0.0%. That sample excludes short-lived lock-probe subprocesses and is not a startup or unlocked-wallet benchmark. More representative measurements remain on the plan.
 
 The Rust security tests cover enabling/removing optional password protection, wrong-password rejection, device-key permissions, recovery-phrase preservation, and restoring an encrypted backup without requiring a new wallet password.
+
+The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering and detail navigation, and exercises the separate Security/Backup pages. Optional `CHAUMARCHY_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet.

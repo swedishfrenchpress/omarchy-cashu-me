@@ -19,24 +19,29 @@ CONTROLS = '''
         function create(): void { if (welcome.createAction.enabled) welcome.createAction.clicked() }
         function unlock(): void { password.text = "temporary native test password"; if (unlockButton.enabled) unlockButton.clicked() }
         function protect(): void {
-            app.page = "settings"
+            app.go("settings")
+            app.go("security")
             securityPassword.text = "temporary native test password"
             securityConfirmation.text = securityPassword.text
             if (enablePasswordButton.enabled) enablePasswordButton.clicked()
         }
-        function mint(): void { backend.request("add_mint", {url: "http://127.0.0.1:33381"}) }
-        function invoice(): void { backend.request("create_invoice", {amount: "64"}) }
+        function mint(): void { app.go("mints"); app.go("add_mint"); app.mintUrl = "http://127.0.0.1:33381"; if (addMintButton.enabled) addMintButton.clicked() }
+        function invoice(): void { app.go("receive"); lightningChoice.clicked(); app.receiveText = "64"; if (amountContinue.enabled) amountContinue.clicked() }
         function sync(): void { backend.request("sync") }
-        function phrase(): void { app.page = "settings"; backend.request("recovery_phrase") }
-        function send(): void { backend.request("send_ecash", {amount: "8"}) }
-        function confirm(): void { backend.request("confirm_payment", {review_id: backend.reviewId}) }
-        function capture(): void { contentScroll.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }
+        function phrase(): void { app.go("backup"); backend.request("recovery_phrase") }
+        function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.amountText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
+        function confirm(): void { if (confirmButton.enabled) confirmButton.clicked() }
+        function back(): void { app.back() }
+        function capture(): void { surface.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }
+        function navigate(destination: string): void { app.tab(destination) }
+        function filter(value: string): void { app.historyFilter = value }
+        function detail(): void { app.transaction = Object.assign({mint: app.selectedMint.url}, backend.state.history[0]); app.go("transaction") }
         function inspect(): string {
             return JSON.stringify({ready: backend.ready, busy: backend.busy, unlocked: backend.unlocked,
                 passwordRequired: backend.state.password_required, safe: desktopLock.safeToUnlock, error: backend.error, page: app.page,
                 hasPhrase: backend.recoveryPhrase !== "", hasShare: !!backend.share.token || !!backend.share.invoice,
                 hasQr: !!backend.share.qr, hasReview: !!backend.review,
-                balance: app.selectedMint.spendable, mints: (backend.state.mints || []).length})
+                completionAmount: backend.completion.amount || "", activityCount: app.activity.length, balance: app.selectedMint.spendable, mints: (backend.state.mints || []).length})
         }
     }
 '''
@@ -117,6 +122,26 @@ ShellRoot {
                     # No Refresh call: prove the hidden wallet's timer mints the invoice.
                     wait(lambda s: s["balance"] == "64", seconds=40)
                     self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
+                    wait(lambda s: s["page"] == "complete" and s["completionAmount"] == "64")
+                    self.assertEqual(ipc(ui, "test", "navigate", "history").returncode, 0)
+                    wait(lambda s: s["page"] == "history" and s["activityCount"] == 1)
+                    self.assertEqual(ipc(ui, "test", "filter", "sent").returncode, 0)
+                    wait(lambda s: s["activityCount"] == 0)
+                    self.assertEqual(ipc(ui, "test", "filter", "all").returncode, 0)
+                    call("detail"); wait(lambda s: s["page"] == "transaction")
+                    call("back"); wait(lambda s: s["page"] == "history")
+                    if environment.get("CHAUMARCHY_TEST_CAPTURE"):
+                        capture = Path(environment["CHAUMARCHY_TEST_CAPTURE"])
+                        for page in ("home", "history", "mints", "send", "send_amount", "receive", "settings", "security"):
+                            self.assertEqual(ipc(ui, "test", "navigate", page).returncode, 0)
+                            wait(lambda s: s["page"] == page)
+                            time.sleep(0.2)
+                            call("capture")
+                            time.sleep(0.2)
+                            shutil.copy(capture, capture.with_name(capture.stem + "-" + page + ".png"))
+                    call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
+                    call("back"); wait(lambda s: not s["hasReview"] and not s["busy"] and s["page"] == "send_amount")
+                    self.assertEqual(json.loads(ipc(ui, "test", "inspect").stdout)["balance"], "64")
                     call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
                     call("confirm"); wait(lambda s: s["hasShare"] and not s["hasReview"] and not s["busy"])
                     call("protect"); wait(lambda s: s["passwordRequired"] and not s["busy"])

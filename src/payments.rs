@@ -71,7 +71,7 @@ pub async fn run(
                 }
                 let token = prepared.confirm(None).await
                     .map_err(|_| "Send outcome needs reconciliation. Check history and pending transfers before retrying.")?;
-                Ok(json!({"token":token.to_string(),"amount":amount.to_string(),"operation_id":operation_id}))
+                Ok(json!({"token":token.to_string(),"amount":amount.to_string(),"operation_id":operation_id,"mint":wallet.mint_url.to_string()}))
             }
             "pay_invoice" => {
                 let wallet = session.selected_wallet()?;

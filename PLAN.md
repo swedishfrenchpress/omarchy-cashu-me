@@ -6,7 +6,7 @@ Last updated: 2026-09-09
 
 ## Goal and confirmed decisions
 
-A lean, native Cashu wallet for personal use on Omarchy, with the desktop's controls and live theme. Cashu.me is an interaction reference, not a feature checklist.
+A lean, native Cashu wallet for personal use on Omarchy, with the desktop's controls and live theme. The primary UX reference is now cashubtc/wallet; its flows are adapted to Omarchy native controls within the existing payment scope.
 
 | Area | Decision |
 | --- | --- |
@@ -85,3 +85,5 @@ This file is the progress tracker. Keep its checkboxes, decisions, and next mile
 - **2026-09-09:** User asked to continue building. Implemented the working CDK wallet milestone and controlled tests; retained daily-use validation as an open milestone.
 
 - **2026-09-09:** User reported stalled setup and changed the onboarding requirement: a simple animated Omarchy-style introduction, with no password gate. Password protection is optional under Security. Device-mode wallets reopen automatically after desktop unlock; protected wallets require their password. Added actual UI-button and security-transition regression tests.
+
+- **2026-09-09:** User selected `cashubtc/wallet` as the primary UX reference. Adapted its main navigation, payment choices, amount/review steps, QR layout, history/detail navigation, mint list, and settings hierarchy. Preserved Omarchy styling and the optional-password onboarding. Mapping and source revision are in `docs/ux-reference.md`.

@@ -17,6 +17,9 @@ QtObject {
     property var review: null
     property string reviewId: ""
     property var share: ({})
+    property var completion: ({})
+    signal paymentFinished()
+    signal mintAdded()
     signal showResult()
     signal locked()
 
@@ -40,6 +43,7 @@ QtObject {
         review = null
         reviewId = ""
         share = {}
+        completion = {}
         locked()
         restarting = true
         worker.running = false
@@ -51,6 +55,14 @@ QtObject {
             if (message.event === "state") {
                 state = message.state
                 ready = true
+                if (share.invoice && share.mint) {
+                    var issued = (state.issued_invoices || []).find(quote => quote.id === share.quote_id && quote.mint === share.mint)
+                    if (issued) {
+                        completion = {received: true, amount: issued.amount}
+                        share = {}
+                        paymentFinished()
+                    }
+                }
             }
             if (message.id !== undefined) busy = false
             if (message.review_done) { review = null; reviewId = "" }
@@ -63,6 +75,10 @@ QtObject {
                 share = message.result
                 showResult()
             }
+            if (message.result && (message.result.paid || message.result.received || message.result.reclaimed)) {
+                completion = message.result
+                paymentFinished()
+            }
             if (message.result && message.result.paid) notice = "Lightning payment completed."
             if (message.result && message.result.received) notice = "Received " + message.result.amount + " sats."
             if (message.result && message.result.reclaimed) notice = "Reclaimed " + message.result.amount + " sats."
@@ -72,6 +88,7 @@ QtObject {
                 phraseTimer.restart()
             }
             if (message.result && message.result.security_updated) notice = "Security settings updated."
+            if (message.result && message.result.mint_added) { notice = "Mint added."; mintAdded() }
             if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
             if (message.event === "fatal") ready = false
         } catch (_) {
@@ -93,6 +110,7 @@ QtObject {
             root.review = null
             root.reviewId = ""
             root.share = {}
+            root.completion = {}
             root.busy = false
             root.locked()
             if (root.restarting) restartTimer.start()
