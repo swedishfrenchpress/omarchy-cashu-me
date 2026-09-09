@@ -17,8 +17,12 @@ BarWidget {
         onPressed: buttonCode => {
             if (launch.running) return
             if (root.bar && root.bar.activePopout) root.bar.activePopout.close()
-            var output = root.QsWindow.window ? root.QsWindow.window.screen.name : ""
-            var originX = Math.round(button.mapToItem(root.QsWindow.window.contentItem, button.width / 2, 0).x)
+            // One null check for both uses: dereferencing contentItem after
+            // guarding screen.name aborted the handler and the button did
+            // nothing at all.
+            var host = root.QsWindow.window
+            var output = host ? host.screen.name : ""
+            var originX = host ? Math.round(button.mapToItem(host.contentItem, button.width / 2, 0).x) : -1
             launch.command = [Quickshell.env("HOME") + "/.local/bin/chaumarchy",
                               buttonCode === Qt.RightButton ? "--window" : "--toggle", output, String(originX)]
             launch.running = true

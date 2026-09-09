@@ -12,7 +12,11 @@ cargo build --locked
 python3 tests/native_smoke.py
 ```
 
-The native smoke test uses offscreen Qt, an isolated home/runtime directory, and the installed Omarchy kit. It checks atomic dark/light theme replacement while hidden, reopening, and quitting. Native tests require permission to create local IPC sockets.
+The native smoke test uses offscreen Qt, an isolated home/runtime directory, and the installed Omarchy kit. It checks atomic dark/light theme replacement while hidden, reopening, and quitting. Native tests require permission to create local IPC sockets. Without `CHAUMARCHY_TEST_WAYLAND=1` it reports a skip rather than a pass, because the panel geometry and motion assertions need a real Wayland desktop and cannot run offscreen.
+
+Set `CHAUMARCHY_LOG` to a file path to record why mint operations failed while
+investigating; see [architecture](architecture.md) for what it does and does not
+contain.
 
 ## End-to-end fake mint
 

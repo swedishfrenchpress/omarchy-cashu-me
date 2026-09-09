@@ -28,3 +28,8 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# tempfile scratch: NamedTempFile stages files with a .tmp prefix, and
+# access.rs stages the plaintext device key through one before publishing it.
+.tmp*
+wallet.lock

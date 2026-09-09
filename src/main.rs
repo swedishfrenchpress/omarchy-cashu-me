@@ -1,4 +1,5 @@
 mod access;
+mod diagnostics;
 mod payments;
 mod wallet;
 
@@ -67,7 +68,8 @@ fn emit(mut value: Value) {
         || writeln!(out).is_err()
         || out.flush().is_err()
     {
-        std::process::exit(0);
+        // A broken pipe is a failure, not a clean shutdown; report it as one.
+        std::process::exit(1);
     }
 }
 
@@ -114,7 +116,24 @@ async fn main() {
             let mut line = Zeroizing::new(String::new());
             match reader.by_ref().take(1_048_577).read_line(&mut line) {
                 Ok(0) | Err(_) => break,
-                Ok(size) if size > 1_048_576 => break,
+                Ok(size) if size > 1_048_576 => {
+                    // Reject the request rather than ending the session. Exiting
+                    // here discarded an unlocked wallet, and any payment under
+                    // review with it, on a single oversized paste. The tail is
+                    // drained so it cannot be read back as a further request.
+                    let mut discard = Zeroizing::new(String::new());
+                    let mut drained = line.ends_with('\n');
+                    while !drained {
+                        discard.clear();
+                        match reader.by_ref().take(1_048_577).read_line(&mut discard) {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => drained = discard.ends_with('\n'),
+                        }
+                    }
+                    emit(
+                        json!({"id":null,"error":"That request is too large for the wallet to process."}),
+                    );
+                }
                 Ok(_) => {
                     if sender.blocking_send(line).is_err() {
                         break;

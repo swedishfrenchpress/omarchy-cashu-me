@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import time
 
 project = Path(__file__).resolve().parents[1]
@@ -31,20 +32,52 @@ launcher.parent.mkdir(parents=True, exist_ok=True)
 applications.mkdir(parents=True, exist_ok=True)
 if not launcher.is_symlink():
     launcher.symlink_to(project / "bin/chaumarchy")
-entry.write_text(marker + '[Desktop Entry]\nType=Application\nName=Chaumarchy\nComment=Cashu wallet for Omarchy\n'
+entry_text = (marker + '[Desktop Entry]\nType=Application\nName=Chaumarchy\nComment=Cashu wallet for Omarchy\n'
     + f'Exec="{quoted}"\nIcon=wallet\nTerminal=false\nCategories=Office;Finance;\nKeywords=Cashu;Bitcoin;Wallet;\n')
-subprocess.run(["desktop-file-validate", str(entry)], check=True)
+# Validate before publishing, and publish atomically. Writing in place left a
+# rejected entry in the launcher, and a truncated write left a file without the
+# marker, which permanently blocks every later run.
+with tempfile.TemporaryDirectory(prefix="chaumarchy-entry-") as staging:
+    staged = Path(staging) / "chaumarchy.desktop"
+    staged.write_text(entry_text)
+    subprocess.run(["desktop-file-validate", str(staged)], check=True)
+publish = entry.with_name(f".chaumarchy.{os.getpid()}.desktop.tmp")
+publish.write_text(entry_text)
+os.replace(publish, entry)
 plugin.mkdir(parents=True, exist_ok=True)
+# Claim ownership before copying contents: an interruption between the two
+# would leave an unmarked directory that blocks every later run.
+(plugin / ".chaumarchy-managed").write_text(marker)
 for source in (project / "plugin").iterdir():
     if source.is_file():
         shutil.copy2(source, plugin / source.name)
-(plugin / ".chaumarchy-managed").write_text(marker)
 shell_config = config / "shell.json"
-layout = json.loads(shell_config.read_text()).get("bar", {}).get("layout", {}) if shell_config.exists() else {}
-installed = any(item.get("id") == "chaumarchy.wallet" for section in layout.values() for item in section if isinstance(item, dict))
+# shell.json is often a symlink into a dotfiles repository. Enabling the bar
+# icon rewrites it through a temp file and rename, which would replace the link
+# with a regular file and silently detach it, so leave that step to the user.
+managed_bar = not shell_config.is_symlink()
+layout = {}
+if managed_bar and shell_config.exists():
+    # The shell itself tolerates a malformed shell.json, so this can genuinely
+    # happen; fail before installing rather than part way through.
+    try:
+        parsed = json.loads(shell_config.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise SystemExit(f"Cannot read {shell_config}. Repair or move it, then run this again.")
+    bar = parsed.get("bar") if isinstance(parsed, dict) else None
+    sections = bar.get("layout") if isinstance(bar, dict) else None
+    layout = sections if isinstance(sections, dict) else {}
+installed = any(item.get("id") == "chaumarchy.wallet"
+                for section in layout.values() if isinstance(section, list)
+                for item in section if isinstance(item, dict))
 subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=True)
-if not installed:
+if not installed and managed_bar:
     if shell_config.exists():
         shutil.copy2(shell_config, shell_config.with_name(f"shell.json.bak.chaumarchy.{time.time_ns()}"))
     subprocess.run(["omarchy", "plugin", "enable", "chaumarchy.wallet", "--section", "right"], check=True)
-print("Installed Chaumarchy in your application launcher and right-hand bar. Click the wallet icon to open it.")
+if managed_bar:
+    print("Installed Chaumarchy in your application launcher and right-hand bar. Click the wallet icon to open it.")
+else:
+    print("Installed Chaumarchy in your application launcher.\n"
+          f"{shell_config} is a symlink, so the bar icon was left alone. Add it with:\n"
+          "  omarchy plugin enable chaumarchy.wallet --section right")

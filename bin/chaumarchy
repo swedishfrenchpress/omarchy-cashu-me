@@ -29,6 +29,10 @@ if [[ ${1:-} == "--preview" || ${1:-} == "--check" ]]; then
   runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/preview
 fi
 
+# Checked before the dispatch below, which execs quickshell directly: without
+# this a missing binary reports "command not found" instead of the cause.
+command -v quickshell >/dev/null || { echo 'Missing dependency: quickshell' >&2; exit 1; }
+
 # Status and quit must never copy files into a running QML configuration.
 case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
@@ -62,10 +66,17 @@ ln -sfn "$omarchy_shell/Commons" "$runtime_dir/Commons"
 ln -sfn "$omarchy_shell/Ui" "$runtime_dir/Ui"
 # Quickshell exposes modules below its config root through the qs.* namespace.
 # Keep packaged Omarchy files untouched and use a private runtime config.
+# nullglob: an unmatched pattern would otherwise reach cp and abort under set -e.
+shopt -s nullglob
 for source_file in "$project_dir"/ui/*.qml "$project_dir"/ui/*.js; do
   destination="$runtime_dir/$(basename -- "$source_file")"
   if ! cmp -s "$source_file" "$destination"; then cp "$source_file" "$destination"; fi
 done
+# Drop copies of files since deleted from ui/; quickshell would still load them.
+for cached in "$runtime_dir"/*.qml "$runtime_dir"/*.js; do
+  test -f "$project_dir/ui/$(basename -- "$cached")" || rm -f "$cached"
+done
+shopt -u nullglob
 
 case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
