@@ -140,6 +140,12 @@ ShellRoot {
                             time.sleep(0.2)
                             shutil.copy(capture, capture.with_name(capture.stem + "-" + page + ".png"))
                     call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
+                    # Presentation changes keep the same prepared payment and form tree.
+                    self.assertEqual(ipc(ui, "wallet", "expand").returncode, 0)
+                    wait(lambda s: s["hasReview"] and s["balance"] == "64")
+                    self.assertEqual(ipc(ui, "wallet", "hide").returncode, 0)
+                    self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
+                    wait(lambda s: s["hasReview"] and not s["busy"])
                     call("back"); wait(lambda s: not s["hasReview"] and not s["busy"] and s["page"] == "send_amount")
                     self.assertEqual(json.loads(ipc(ui, "test", "inspect").stdout)["balance"], "64")
                     call("send"); wait(lambda s: s["hasReview"] and not s["busy"])

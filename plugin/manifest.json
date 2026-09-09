@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "chaumarchy.wallet",
+  "name": "Chaumarchy",
+  "version": "1.0.0",
+  "author": "Chaumarchy contributors",
+  "license": "MIT",
+  "description": "Open the native Cashu wallet panel.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {"barWidget": "Bar.qml"},
+  "barWidget": {
+    "displayName": "Chaumarchy",
+    "description": "Cashu wallet. Click for the panel; right-click for a window.",
+    "category": "Utilities",
+    "allowMultiple": false,
+    "defaults": {}
+  }
+}

@@ -9,6 +9,20 @@ import qs.Ui as Ui
 
 ShellRoot {
     id: app
+    property bool compact: Quickshell.env("CHAUMARCHY_WINDOW") !== "1" && Quickshell.env("CHAUMARCHY_PREVIEW") !== "1"
+    property bool presented: true
+    property string outputName: Quickshell.env("CHAUMARCHY_SCREEN") || ""
+    property double dismissedAt: 0
+    function dismiss() {
+        presented = false
+        backend.recoveryPhrase = ""
+        scanner.running = false
+        dismissedAt = Date.now()
+    }
+    function present(asWindow) {
+        compact = !asWindow
+        presented = true
+    }
     property string page: "home"
     property var trail: []
     property string historyFilter: "all"
@@ -181,11 +195,19 @@ ShellRoot {
 
     IpcHandler {
         target: "wallet"
-        function show(): void { window.visible = true }
-        function hide(): void { window.visible = false }
+        function show(): void { app.present(false) }
+        function expand(): void { app.present(true) }
+        function toggle(screenName: string): void {
+            if (app.presented && app.compact && app.outputName === screenName) { app.dismiss(); return }
+            // A click on the bar can also dismiss the compositor focus grab.
+            if (!app.presented && Date.now() - app.dismissedAt < 200) return
+            app.outputName = screenName
+            app.present(false)
+        }
+        function hide(): void { app.dismiss() }
         function quit(): void { Qt.quit() }
         function status(): string {
-            return JSON.stringify({mode: backend.preview ? "interface-preview" : "wallet", visible: window.visible,
+            return JSON.stringify({mode: backend.preview ? "interface-preview" : "wallet", visible: app.presented, presentation: app.compact ? "panel" : "window",
                 unlocked: backend.unlocked,
                 page: app.page, background: Color.background.toString(),
                 foreground: Color.foreground.toString(), font: Style.font.family})
@@ -261,31 +283,43 @@ ShellRoot {
         Action { text: "Camera"; Layout.fillWidth: true; onClicked: { app.scanTarget = parent.target; app.scan("camera") } }
     }
 
+    Loader {
+        id: panelLoader
+        active: Quickshell.env("QT_QPA_PLATFORM") !== "offscreen"
+        source: "CompactPanel.qml"
+        onLoaded: {
+            item.visible = Qt.binding(() => app.presented && app.compact)
+            item.outputName = Qt.binding(() => app.outputName)
+            item.suspendDismissal = Qt.binding(() => exportDialog.visible || importDialog.visible || imageDialog.visible || scanner.running)
+            item.dismissed.connect(app.dismiss)
+        }
+    }
     FloatingWindow {
         id: window
         title: backend.preview ? "Chaumarchy — interface preview" : "Chaumarchy"
-        visible: true
+        visible: app.presented && !app.compact
+        onVisibleChanged: if (!visible && !app.compact) app.presented = false
         implicitWidth: Style.space(460)
         implicitHeight: Style.space(620)
         minimumSize: Qt.size(340, 420)
         color: Color.background
 
-        Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-        Shortcut { sequence: "Escape"; onActivated: app.back() }
-        Shortcut { sequence: "Alt+Left"; onActivated: app.back() }
-        Shortcut { sequence: "Ctrl+1"; enabled: app.walletVisible; onActivated: app.tab("home") }
-        Shortcut { sequence: "Ctrl+2"; enabled: app.walletVisible; onActivated: app.tab("history") }
-        Shortcut { sequence: "Ctrl+3"; enabled: app.walletVisible; onActivated: app.tab("mints") }
-        Shortcut { sequence: "Ctrl+Comma"; enabled: !backend.review; onActivated: app.go("settings") }
-
         Rectangle {
             id: surface
+            parent: app.compact && panelLoader.item ? panelLoader.item.body : window.contentItem
             anchors.fill: parent
-            color: Color.background
+            color: app.compact ? Color.popups.background : Color.background
+            Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
+            Shortcut { sequence: "Escape"; onActivated: app.compact ? app.dismiss() : app.back() }
+            Shortcut { sequence: "Alt+Left"; onActivated: app.back() }
+            Shortcut { sequence: "Ctrl+1"; enabled: app.walletVisible; onActivated: app.tab("home") }
+            Shortcut { sequence: "Ctrl+2"; enabled: app.walletVisible; onActivated: app.tab("history") }
+            Shortcut { sequence: "Ctrl+3"; enabled: app.walletVisible; onActivated: app.tab("mints") }
+            Shortcut { sequence: "Ctrl+Comma"; enabled: !backend.review; onActivated: app.go("settings") }
         Controls.ScrollView {
             id: contentScroll
             anchors.fill: parent
-            anchors.margins: Style.space(26)
+            anchors.margins: Style.space(app.compact ? 18 : 26)
             anchors.bottomMargin: navigation.visible ? navigation.height + Style.space(40) : Style.space(26)
             contentWidth: availableWidth
             clip: true
@@ -293,11 +327,25 @@ ShellRoot {
             ColumnLayout {
                 width: Math.min(contentScroll.availableWidth, Style.space(460))
                 x: (contentScroll.availableWidth - width) / 2
-                spacing: Style.space(22)
+                spacing: Style.space(app.compact ? 16 : 22)
 
                 RowLayout {
                     Layout.fillWidth: true
                     Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
+                    Ui.Button {
+                        text: app.compact ? "↗" : "↙"
+                        Accessible.name: app.compact ? "Expand to window" : "Return to panel"
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.text: Accessible.name
+                        focusable: true
+                        onClicked: app.present(app.compact)
+                    }
+                    Ui.Button { text: "×"; Accessible.name: "Hide wallet"; focusable: true; onClicked: app.dismiss() }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: app.walletVisible
+                    Label { text: ({home: "Wallet", history: "History", mints: "Mints"})[app.page] || ""; opacity: 0.55; Layout.fillWidth: true }
                     Ui.Button { text: "Scan"; visible: app.walletVisible && app.mainPage; enabled: !backend.busy; focusable: true; onClicked: app.go("scan") }
                     Ui.Button {
                         enabled: !backend.review && !backend.busy
@@ -425,10 +473,10 @@ ShellRoot {
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "home"
                     Layout.fillWidth: true
-                    spacing: Style.space(22)
-                    Item { Layout.preferredHeight: Style.space(10) }
+                    spacing: Style.space(app.compact ? 14 : 22)
+                    Item { Layout.preferredHeight: Style.space(app.compact ? 0 : 10) }
                     Ui.Button { text: app.selectedMint.name + "  ⌄"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.go("mints") }
-                    Label { text: app.sats(app.selectedMint.spendable); font.pixelSize: Style.space(54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: app.sats(app.selectedMint.spendable); font.pixelSize: Style.space(app.compact ? 46 : 54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: backend.state.restoring === true; text: "Recovering from your mints…"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
                     Label { visible: app.selectedMint.sync === "retrying"; text: "Mint unavailable. Balance may be out of date."; Layout.fillWidth: true; opacity: 0.6 }

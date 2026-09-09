@@ -12,7 +12,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 | --- | --- |
 | Name and repository | Chaumarchy; `swedishfrenchpress/chaumarchy`. Local checkout remains `~/Documents/github/cashu-wallet`. |
 | Engine | Rust CDK, selected by the user over Coco; pinned CDK and cdk-sqlite 0.18.0 with default features disabled. |
-| Native interface | Standalone Quickshell/Qt window importing installed Omarchy Commons and Ui modules. Private pipe to the Rust worker. |
+| Native interface | Compact Quickshell panel opened from a right-hand Omarchy bar icon, expandable into a window. Installed Omarchy Commons and Ui modules; private pipe to the Rust worker. |
 | Appearance | Use Omarchy controls, typography, spacing, and colors; follow theme replacement without restarting the app. |
 | Home | Selected mint, balance, Send/Receive, recent history, pending invoices/ecash, Settings. |
 | Payments | Cashu tokens and BOLT11 Lightning invoices, in sats, with explicit review and confirmation. |
@@ -24,6 +24,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 
 ## Implemented and verified
 
+- [x] Bar-first compact panel, outside-click dismissal, expand/return without recreating payment state, and persistent user plugin installation.
 - [x] Establish the public repository and record planning before wallet implementation.
 - [x] Reuse installed Omarchy controls without modifying packaged source.
 - [x] Native preview and atomic dark/light theme replacement while hidden.

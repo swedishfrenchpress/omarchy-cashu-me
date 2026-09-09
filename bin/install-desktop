@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Register this checkout in the user's launcher without system modifications."""
 import os
+import json
 from pathlib import Path
+import shutil
 import subprocess
+import time
 
 project = Path(__file__).resolve().parents[1]
 if not (project / "target/release/chaumarchy-wallet").is_file():
@@ -11,6 +14,11 @@ launcher = Path.home() / ".local/bin/chaumarchy"
 applications = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "applications"
 entry = applications / "chaumarchy.desktop"
 marker = "# Managed by Chaumarchy install-desktop\n"
+config = Path.home() / ".config/omarchy"
+plugin = config / "plugins/chaumarchy.wallet"
+if plugin.exists() and not (plugin / ".chaumarchy-managed").is_file():
+    raise SystemExit("An unrelated chaumarchy.wallet plugin already exists; nothing changed.")
+subprocess.run(["omarchy", "plugin", "validate", str(project / "plugin")], check=True)
 if (launcher.exists() or launcher.is_symlink()) and not (launcher.is_symlink() and launcher.resolve() == project / "bin/chaumarchy"):
     raise SystemExit("An unrelated ~/.local/bin/chaumarchy already exists; nothing changed.")
 if entry.exists() and not entry.read_text().startswith(marker):
@@ -26,4 +34,17 @@ if not launcher.is_symlink():
 entry.write_text(marker + '[Desktop Entry]\nType=Application\nName=Chaumarchy\nComment=Cashu wallet for Omarchy\n'
     + f'Exec="{quoted}"\nIcon=wallet\nTerminal=false\nCategories=Office;Finance;\nKeywords=Cashu;Bitcoin;Wallet;\n')
 subprocess.run(["desktop-file-validate", str(entry)], check=True)
-print("Installed Chaumarchy in your application launcher.")
+plugin.mkdir(parents=True, exist_ok=True)
+for source in (project / "plugin").iterdir():
+    if source.is_file():
+        shutil.copy2(source, plugin / source.name)
+(plugin / ".chaumarchy-managed").write_text(marker)
+shell_config = config / "shell.json"
+layout = json.loads(shell_config.read_text()).get("bar", {}).get("layout", {}) if shell_config.exists() else {}
+installed = any(item.get("id") == "chaumarchy.wallet" for section in layout.values() for item in section if isinstance(item, dict))
+subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=True)
+if not installed:
+    if shell_config.exists():
+        shutil.copy2(shell_config, shell_config.with_name(f"shell.json.bak.chaumarchy.{time.time_ns()}"))
+    subprocess.run(["omarchy", "plugin", "enable", "chaumarchy.wallet", "--section", "right"], check=True)
+print("Installed Chaumarchy in your application launcher and right-hand bar. Click the wallet icon to open it.")

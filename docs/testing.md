@@ -60,3 +60,12 @@ On the development machine, Rust 1.98.0 produced a stripped release worker of 16
 The Rust security tests cover enabling/removing optional password protection, wrong-password rejection, device-key permissions, recovery-phrase preservation, and restoring an encrypted backup without requiring a new wallet password.
 
 The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering and detail navigation, and exercises the separate Security/Backup pages. Optional `CHAUMARCHY_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet.
+
+
+For panel rendering on a running Hyprland desktop, run:
+
+```sh
+CHAUMARCHY_TEST_WAYLAND=1 CHAUMARCHY_TEST_CAPTURE=/tmp/chaumarchy-panel.png python3 tests/native_smoke.py
+```
+
+This opens an isolated, non-spending preview, checks panel/window transitions and dimensions, and captures only its content. The normal native wallet test also verifies a prepared payment survives expand/hide/reopen before cancellation. The installed bar button and outside-click behavior should be checked on the desktop; these are not simulated by the offscreen test.

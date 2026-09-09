@@ -10,6 +10,17 @@ if [[ -x $project_dir/target/release/chaumarchy-wallet ]]; then
 fi
 export CHAUMARCHY_SCANNER="$project_dir/bin/scan-qr"
 export CHAUMARCHY_PREVIEW=0
+export CHAUMARCHY_WINDOW=0
+export CHAUMARCHY_SCREEN=${2:-}
+ipc_method=show
+ipc_args=()
+if [[ ${1:-} == "--window" ]]; then
+  export CHAUMARCHY_WINDOW=1
+  ipc_method=expand
+elif [[ ${1:-} == "--toggle" ]]; then
+  ipc_method=toggle
+  ipc_args=("$CHAUMARCHY_SCREEN")
+fi
 if [[ ${1:-} == "--preview" || ${1:-} == "--check" ]]; then
   export CHAUMARCHY_PREVIEW=1
   runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/preview
@@ -19,12 +30,12 @@ fi
 case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
   --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
-  --check|--preview|"") ;;
-  *) echo 'Usage: chaumarchy [--preview|--status|--quit|--check]' >&2; exit 2 ;;
+  --check|--preview|--window|--toggle|"") ;;
+  *) echo 'Usage: chaumarchy [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
 # Reopening must not hot-reload a running wallet or interrupt its worker.
-if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet show >/dev/null 2>&1; then
+if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet "$ipc_method" "${ipc_args[@]}" >/dev/null 2>&1; then
   exit 0
 fi
 
@@ -51,9 +62,9 @@ case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
   --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
   --check) exec quickshell -p "$runtime_dir" ;;
-  --preview) ;;
+  --preview|--window|--toggle) ;;
   "") ;;
-  *) echo 'Usage: chaumarchy [--preview|--status|--quit|--check]' >&2; exit 2 ;;
+  *) echo 'Usage: chaumarchy [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
 if [[ $CHAUMARCHY_PREVIEW == 0 && ! -x $CHAUMARCHY_BACKEND ]]; then
@@ -62,7 +73,7 @@ if [[ $CHAUMARCHY_PREVIEW == 0 && ! -x $CHAUMARCHY_BACKEND ]]; then
 fi
 
 # An existing instance owns the window and the wallet worker.
-if quickshell ipc -p "$runtime_dir" call -- wallet show >/dev/null 2>&1; then
+if quickshell ipc -p "$runtime_dir" call -- wallet "$ipc_method" "${ipc_args[@]}" >/dev/null 2>&1; then
   exit 0
 fi
 exec quickshell -n -p "$runtime_dir"

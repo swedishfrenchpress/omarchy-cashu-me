@@ -35,3 +35,10 @@ Cashu recovery is mint-dependent. A phrase alone does not recover the mint list,
 ## Current limits
 
 Tests cover controlled fake payments and selected interruptions. Real Lightning routing, Cashu.me interoperability, physical camera input, all network-failure phases, malformed mint responses, long-term recovery workloads, and broad Omarchy-version compatibility remain release gates. The installed Omarchy component API is not a stable cross-distribution interface. Resource measurements belong to this installation, not a general performance guarantee.
+
+
+## Bar and panel
+
+The user-owned `chaumarchy.wallet` Omarchy plugin is only a launcher. It holds no wallet data and calls the standalone application's presentation IPC (`toggle`, `expand`). The wallet owns a Wayland layer panel and a floating window; one existing QML content tree moves between them, keeping the same worker, forms and prepared payment. The panel uses Omarchy border, popup color, spacing and font tokens and Hyprland's focus grab for outside-click dismissal. File dialogs and QR scanning temporarily release the grab. Hiding also clears a displayed recovery phrase and stops scanning; background payment monitoring remains active.
+
+`bin/install-desktop` validates and copies the plugin into the user plugin directory, asks Omarchy to rescan it, and adds it to the right bar only if absent, backing up the bar configuration first. Reinstalling preserves a user's later placement. No packaged Omarchy sources are modified. Offscreen tests skip creating the Wayland-only panel; the optional Wayland smoke run verifies the actual panel and visual-parent transfer.

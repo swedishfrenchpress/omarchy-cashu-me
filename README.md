@@ -14,7 +14,7 @@ cargo build --release --locked
 chaumarchy
 ```
 
-The installer registers this checkout in your application launcher and creates `~/.local/bin/chaumarchy`. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
+The installer registers this checkout in your application launcher, creates `~/.local/bin/chaumarchy`, and adds a wallet icon to the right-hand Omarchy bar. It backs up `shell.json` before adding the icon and preserves your existing layout. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
 
 For development, `cargo build --locked` works when no release binary exists. `./bin/chaumarchy --preview` opens a separate UI preview with wallet actions disabled.
 
@@ -23,7 +23,9 @@ chaumarchy --status
 chaumarchy --quit
 ```
 
-Closing the window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
+Click the wallet icon to open a compact panel on that monitor. Click outside, press Escape, or use × to hide it. Use ↗ to expand into a resizable window and ↙ to return to the panel; forms and payment reviews stay intact. Right-click the bar icon, or run `chaumarchy --window`, to open the window directly. The icon persists across login; the wallet starts when first opened.
+
+Closing the panel or window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
 
 ## Using the wallet
 
