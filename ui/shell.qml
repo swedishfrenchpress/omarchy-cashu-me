@@ -10,16 +10,21 @@ import qs.Ui as Ui
 ShellRoot {
     id: app
     property bool compact: Quickshell.env("CHAUMARCHY_WINDOW") !== "1" && Quickshell.env("CHAUMARCHY_PREVIEW") !== "1"
+    property bool presentationMotion: Quickshell.env("CHAUMARCHY_ANIMATE") === "1"
+    property real anchorX: Number(Quickshell.env("CHAUMARCHY_ANCHOR_X") || "-1")
+    MotionPreferences { id: motion }
     property bool presented: true
     property string outputName: Quickshell.env("CHAUMARCHY_SCREEN") || ""
     property double dismissedAt: 0
-    function dismiss() {
+    function dismiss(immediate, outside) {
+        if (immediate === true) presentationMotion = false
         presented = false
         backend.recoveryPhrase = ""
         scanner.running = false
-        dismissedAt = Date.now()
+        dismissedAt = outside === true ? Date.now() : 0
     }
-    function present(asWindow) {
+    function present(asWindow, animate) {
+        presentationMotion = animate === true
         compact = !asWindow
         presented = true
     }
@@ -202,7 +207,11 @@ ShellRoot {
             // A click on the bar can also dismiss the compositor focus grab.
             if (!app.presented && Date.now() - app.dismissedAt < 200) return
             app.outputName = screenName
-            app.present(false)
+            app.present(false, true)
+        }
+        function toggleAt(screenName: string, originX: int): void {
+            app.anchorX = originX
+            toggle(screenName)
         }
         function hide(): void { app.dismiss() }
         function quit(): void { Qt.quit() }
@@ -221,7 +230,8 @@ ShellRoot {
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
     }
-    component Action: Ui.Button {
+    component Button: MotionButton { reducedMotion: motion.reduced }
+    component Action: Button {
         focusable: true
         bordered: true
         opacity: enabled ? 1 : 0.4
@@ -233,7 +243,7 @@ ShellRoot {
         color: Color.foreground
         opacity: 0.15
     }
-    component Entry: Ui.Button {
+    component Entry: Button {
         id: entry
         property string heading: ""
         property string detail: ""
@@ -288,10 +298,14 @@ ShellRoot {
         active: Quickshell.env("QT_QPA_PLATFORM") !== "offscreen"
         source: "CompactPanel.qml"
         onLoaded: {
-            item.visible = Qt.binding(() => app.presented && app.compact)
+            item.open = Qt.binding(() => app.presented && app.compact)
+            item.animate = Qt.binding(() => app.presentationMotion && app.compact)
+            item.reducedMotion = Qt.binding(() => motion.reduced)
+            item.privacyHidden = Qt.binding(() => !backend.preview && !desktopLock.safeToUnlock)
+            item.anchorX = Qt.binding(() => app.anchorX)
             item.outputName = Qt.binding(() => app.outputName)
             item.suspendDismissal = Qt.binding(() => exportDialog.visible || importDialog.visible || imageDialog.visible || scanner.running)
-            item.dismissed.connect(app.dismiss)
+            item.dismissed.connect(() => app.dismiss(false, true))
         }
     }
     FloatingWindow {
@@ -310,7 +324,7 @@ ShellRoot {
             anchors.fill: parent
             color: app.compact ? Color.popups.background : Color.background
             Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-            Shortcut { sequence: "Escape"; onActivated: app.compact ? app.dismiss() : app.back() }
+            Shortcut { sequence: "Escape"; onActivated: app.compact ? app.dismiss(true) : app.back() }
             Shortcut { sequence: "Alt+Left"; onActivated: app.back() }
             Shortcut { sequence: "Ctrl+1"; enabled: app.walletVisible; onActivated: app.tab("home") }
             Shortcut { sequence: "Ctrl+2"; enabled: app.walletVisible; onActivated: app.tab("history") }
@@ -332,22 +346,21 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true
                     Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
-                    Ui.Button {
+                    Button {
                         text: app.compact ? "↗" : "↙"
                         Accessible.name: app.compact ? "Expand to window" : "Return to panel"
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.text: Accessible.name
+                        tooltipText: Accessible.name
                         focusable: true
                         onClicked: app.present(app.compact)
                     }
-                    Ui.Button { text: "×"; Accessible.name: "Hide wallet"; focusable: true; onClicked: app.dismiss() }
+                    Button { text: "×"; Accessible.name: "Hide wallet"; focusable: true; onClicked: app.dismiss() }
                 }
                 RowLayout {
                     Layout.fillWidth: true
                     visible: app.walletVisible
                     Label { text: ({home: "Wallet", history: "History", mints: "Mints"})[app.page] || ""; opacity: 0.55; Layout.fillWidth: true }
-                    Ui.Button { text: "Scan"; visible: app.walletVisible && app.mainPage; enabled: !backend.busy; focusable: true; onClicked: app.go("scan") }
-                    Ui.Button {
+                    Button { text: "Scan"; visible: app.walletVisible && app.mainPage; enabled: !backend.busy; focusable: true; onClicked: app.go("scan") }
+                    Button {
                         enabled: !backend.review && !backend.busy
                         visible: app.walletVisible
                         text: app.mainPage ? "Settings" : "← Back"
@@ -358,6 +371,8 @@ ShellRoot {
 
                 Welcome {
                     id: welcome
+                    reducedMotion: motion.reduced
+                    presented: app.presented
                     visible: backend.ready && !app.walletVisible && !backend.state.exists && !app.restoreMode
                     Layout.fillWidth: true
                     Layout.topMargin: Math.max(0, (contentScroll.availableHeight - implicitHeight - Style.space(80)) / 2)
@@ -396,8 +411,8 @@ ShellRoot {
                     spacing: Style.space(16)
                     Label { text: "Bring your wallet home"; font.bold: true; font.pixelSize: Style.font.heading }
                     Label { text: "Restore your encrypted backup or use your recovery words and mint URLs."; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.Button { text: "Choose a backup file"; focusable: true; onClicked: importDialog.open() }
-                    Ui.Button { text: "Use recovery words"; focusable: true; onClicked: app.phraseRestore = !app.phraseRestore }
+                    Button { text: "Choose a backup file"; focusable: true; onClicked: importDialog.open() }
+                    Button { text: "Use recovery words"; focusable: true; onClicked: app.phraseRestore = !app.phraseRestore }
                     Controls.TextArea {
                         id: restoreWords
                         visible: app.phraseRestore && !backend.state.exists
@@ -443,12 +458,12 @@ ShellRoot {
                             restorePassword.clear()
                         }
                     }
-                    Ui.Button { text: "Back"; focusable: true; onClicked: app.restoreMode = false }
+                    Button { text: "Back"; focusable: true; onClicked: app.restoreMode = false }
                 }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
                 Label { visible: backend.notice !== "" && app.page !== "complete"; text: backend.notice; Layout.fillWidth: true }
                 Label { visible: scanner.running; text: "Scanning… Hold one QR code steady. Scanning stops after one minute."; Layout.fillWidth: true; opacity: 0.65 }
-                Ui.Button { visible: scanner.running; text: "Cancel scan"; focusable: true; onClicked: scanner.running = false }
+                Button { visible: scanner.running; text: "Cancel scan"; focusable: true; onClicked: scanner.running = false }
 
                 ColumnLayout {
                     visible: !!backend.review
@@ -468,14 +483,14 @@ ShellRoot {
                         Layout.fillWidth: true
                         onClicked: backend.request("confirm_payment", {review_id: backend.reviewId})
                     }
-                    Ui.Button { text: "Cancel"; focusable: true; enabled: !backend.busy; Layout.alignment: Qt.AlignHCenter; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
+                    Button { text: "Cancel"; focusable: true; enabled: !backend.busy; Layout.alignment: Qt.AlignHCenter; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "home"
                     Layout.fillWidth: true
                     spacing: Style.space(app.compact ? 14 : 22)
                     Item { Layout.preferredHeight: Style.space(app.compact ? 0 : 10) }
-                    Ui.Button { text: app.selectedMint.name + "  ⌄"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.go("mints") }
+                    Button { text: app.selectedMint.name + "  ⌄"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.go("mints") }
                     Label { text: app.sats(app.selectedMint.spendable); font.pixelSize: Style.space(app.compact ? 46 : 54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: backend.state.restoring === true; text: "Recovering from your mints…"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
@@ -501,19 +516,19 @@ ShellRoot {
                             onClicked: { app.transaction = Object.assign({mint: app.selectedMint.url}, modelData); app.go("transaction") }
                         }
                     }
-                    Ui.Button { text: "View all activity  ›"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
+                    Button { text: "View all activity  ›"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "history"
                     Layout.fillWidth: true
                     spacing: Style.space(16)
-                    RowLayout { Layout.fillWidth: true; Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true } Ui.Button { text: "Refresh"; focusable: true; enabled: !backend.busy; onClicked: backend.request("sync") } }
+                    RowLayout { Layout.fillWidth: true; Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true } Button { text: "Refresh"; focusable: true; enabled: !backend.busy; onClicked: backend.request("sync") } }
                     MintPicker {}
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
                     RowLayout {
                         Layout.fillWidth: true
                         Repeater { model: [{id:"all", name:"All"}, {id:"received", name:"Received"}, {id:"sent", name:"Sent"}]
-                            delegate: Ui.Button { required property var modelData; Layout.fillWidth: true; text: modelData.name; selected: app.historyFilter === modelData.id; focusable: true; onClicked: app.historyFilter = modelData.id }
+                            delegate: Button { required property var modelData; Layout.fillWidth: true; text: modelData.name; selected: app.historyFilter === modelData.id; focusable: true; onClicked: app.historyFilter = modelData.id }
                         }
                     }
                     Label { visible: !app.activity.length; text: "No matching activity"; opacity: 0.6 }
@@ -630,7 +645,7 @@ ShellRoot {
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Paste a Cashu token"; text: app.receiveText; onTextEdited: app.receiveText = text }
                     Label { text: "The token is redeemed with its issuing mint. Add an unfamiliar mint before receiving its ecash."; Layout.fillWidth: true; opacity: 0.6 }
                     Action { text: backend.busy ? "Preparing…" : "Review token"; Layout.fillWidth: true; enabled: backend.unlocked && !backend.busy && app.receiveText.trim() !== ""; onClicked: backend.request("receive_token", {text: app.receiveText}) }
-                    Ui.Button { text: "Scan instead"; focusable: true; onClicked: app.go("scan") }
+                    Button { text: "Scan instead"; focusable: true; onClicked: app.go("scan") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "scan"
@@ -657,7 +672,7 @@ ShellRoot {
                         Layout.fillWidth: true
                         onClicked: { app.clipboardText = backend.share.token || backend.share.invoice || ""; clipboard.stdinEnabled = true; clipboard.running = true }
                     }
-                    Ui.Button { text: app.revealShare ? "Hide text" : "Show full text"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.revealShare = !app.revealShare }
+                    Button { text: app.revealShare ? "Hide text" : "Show full text"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.revealShare = !app.revealShare }
                     Controls.TextArea {
                         visible: app.revealShare
                         Layout.fillWidth: true; readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
@@ -665,14 +680,19 @@ ShellRoot {
                         background: Rectangle { color: "transparent" }
                     }
                     Label { text: backend.share.token ? "Anyone holding this token can redeem it. Reopen or reclaim it from History." : "You can close this window. Your unlocked wallet keeps checking for payment."; opacity: 0.6; Layout.fillWidth: true }
-                    Ui.Button { text: "Done"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.back() }
+                    Button { text: "Done"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.back() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "complete"
                     Layout.fillWidth: true
                     spacing: Style.space(24)
                     Item { Layout.preferredHeight: Style.space(36) }
-                    Label { text: "✓"; font.pixelSize: Style.space(42); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    SuccessMark {
+                        Layout.fillWidth: true
+                        reducedMotion: motion.reduced
+                        presented: app.presented
+                        receipt: JSON.stringify(backend.completion)
+                    }
                     Label { text: backend.completion.paid ? "Payment sent" : backend.completion.reclaimed ? "Ecash reclaimed" : "Payment received"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: app.sats(backend.completion.amount) + " sats"; font.pixelSize: Style.space(40); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Action { text: "Back to wallet"; Layout.fillWidth: true; onClicked: app.back() }
@@ -708,10 +728,10 @@ ShellRoot {
                         delegate: Entry { required property var modelData; heading: modelData.name; detail: modelData.url; trailing: app.mintUrl === modelData.url ? "✓" : "›"; selected: app.mintUrl === modelData.url; onClicked: app.mintUrl = modelData.url }
                     }
                     Ui.TextField { id: mintInput; Layout.fillWidth: true; placeholderText: "Or enter a mint URL"; text: app.mintUrl; onTextEdited: app.mintUrl = text }
-                    Ui.Button { text: "Scan mint URL"; focusable: true; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
+                    Button { text: "Scan mint URL"; focusable: true; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
                     Label { text: "Adding a mint means trusting its operator to redeem your ecash."; opacity: 0.6; Layout.fillWidth: true }
                     Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
-                    Ui.Button { text: "View my mints"; focusable: true; onClicked: app.tab("mints") }
+                    Button { text: "View my mints"; focusable: true; onClicked: app.tab("mints") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "settings"
@@ -722,10 +742,16 @@ ShellRoot {
                     Entry { heading: "Backup & recovery"; detail: "Recovery words and encrypted backups"; onClicked: app.go("backup") }
                     Entry { heading: "Security"; detail: backend.state.password_required ? "Password protection on" : "Password protection off"; onClicked: app.go("security") }
                     Entry { heading: "Mints"; detail: (backend.state.mints || []).length + " added"; onClicked: app.go("mints") }
+                    Entry {
+                        heading: "Reduce motion"
+                        detail: "Gentle fades without movement"
+                        trailing: motion.reduced ? "On" : "Off"
+                        onClicked: motion.reducedMotion = !motion.reducedMotion
+                    }
                     Divider {}
                     Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
                     Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked; Layout.fillWidth: true; onClicked: backend.lock() }
-                    Ui.Button { text: "Quit Chaumarchy"; focusable: true; onClicked: Qt.quit() }
+                    Button { text: "Quit Chaumarchy"; focusable: true; onClicked: Qt.quit() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "security"
@@ -768,7 +794,7 @@ ShellRoot {
                     Label { visible: backend.recoveryPhrase !== ""; text: backend.recoveryPhrase; Layout.fillWidth: true; font.bold: true }
                     Label { visible: backend.recoveryPhrase !== ""; text: (backend.state.mints || []).map(mint => mint.url).join("\n"); Layout.fillWidth: true }
                     Label { visible: backend.recoveryPhrase !== ""; text: "Write these words down privately, together with your mint URLs. This view hides after one minute. A phrase does not restore your full history."; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.Button { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; focusable: true; onClicked: backend.recoveryPhrase = "" }
+                    Button { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; focusable: true; onClicked: backend.recoveryPhrase = "" }
                     Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup password (12+ characters)"; Layout.fillWidth: true }
                     Ui.TextField { id: backupConfirmation; password: true; placeholderText: "Repeat backup password"; Layout.fillWidth: true }
                     Action {
@@ -803,7 +829,7 @@ ShellRoot {
             spacing: Style.space(12)
             Repeater {
                 model: [{id:"home", label:"Wallet"}, {id:"history", label:"History"}, {id:"mints", label:"Mints"}]
-                delegate: Ui.Button { required property var modelData; text: modelData.label; selected: app.page === modelData.id; focusable: true; Layout.fillWidth: true; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
+                delegate: Button { required property var modelData; text: modelData.label; selected: app.page === modelData.id; focusable: true; Layout.fillWidth: true; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
             }
         }
         }

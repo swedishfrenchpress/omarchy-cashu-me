@@ -4,10 +4,18 @@ import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui as Ui
+import "Motion.js" as Motion
 
 PanelWindow {
     id: root
-    visible: false
+    property bool open: false
+    property bool animate: false
+    property bool reducedMotion: false
+    property bool privacyHidden: false
+    property real anchorX: -1
+    readonly property real progress: card.opacity
+    readonly property real visualScale: reducedMotion ? 1 : 0.97 + 0.03 * card.opacity
+    visible: !privacyHidden && (open || card.opacity > 0)
     property string outputName: ""
     property bool suspendDismissal: false
     property alias body: holder
@@ -21,11 +29,13 @@ PanelWindow {
     color: "transparent"
     WlrLayershell.namespace: "chaumarchy-panel"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    // Release all input immediately, even while the visual exit is finishing.
+    WlrLayershell.keyboardFocus: open && !privacyHidden ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    mask: Region { width: root.open ? root.width : 0; height: root.open ? root.height : 0 }
     HyprlandFocusGrab {
-        active: root.visible && !root.suspendDismissal
+        active: root.open && root.visible && !root.suspendDismissal
         windows: [root]
-        onCleared: if (root.visible && !root.suspendDismissal) root.dismissed()
+        onCleared: if (root.open && !root.suspendDismissal) root.dismissed()
     }
     Ui.BorderSurface {
         id: card
@@ -34,6 +44,22 @@ PanelWindow {
         borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
         radius: Style.cornerRadius
         padding: 0
+        opacity: root.open ? 1 : 0
+        Behavior on opacity {
+            enabled: root.animate && !root.privacyHidden
+            NumberAnimation {
+                duration: root.reducedMotion ? Motion.gentle : (root.open ? Motion.panelEnter : Motion.panelExit)
+                easing.type: Easing.BezierSpline
+                easing.bezierCurve: Motion.easeOut
+            }
+        }
+        transform: Scale {
+            // Coordinates supplied by the bar button, relative to this card.
+            origin.x: root.anchorX < 0 || !root.screen ? card.width : Math.max(0, Math.min(card.width, root.anchorX - (root.screen.width - root.margins.right - root.width)))
+            origin.y: 0
+            xScale: root.visualScale
+            yScale: xScale
+        }
         Item {
             id: holder
             anchors.fill: parent

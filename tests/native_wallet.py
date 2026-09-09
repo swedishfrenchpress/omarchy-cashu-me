@@ -76,6 +76,7 @@ ShellRoot {
 }
 ''')
             environment = dict(os.environ, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
+                               XDG_CONFIG_HOME=str(home / ".config"),
                 QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software", QT_QPA_PLATFORMTHEME="generic", CHAUMARCHY_PREVIEW="0",
                 OMARCHY_PATH=str(shell.parent), CHAUMARCHY_DATA_DIR=str(base / "wallet"),
                 CHAUMARCHY_BACKEND=str(PROJECT / "target/debug/chaumarchy-wallet"))

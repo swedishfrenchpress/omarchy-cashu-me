@@ -37,9 +37,22 @@ class NativeSmoke(unittest.TestCase):
         target: "test"
         function capture(path: string): void { surface.grabToImage(result => result.saveToFile(path)) }
         function geometry(): string { return JSON.stringify({width: surface.width, height: surface.height, panel: !!panelLoader.item && surface.parent === panelLoader.item.body}) }
+        function animateOpen(): void { app.present(false, true) }
+        function reverse(): string {
+            var before = panelLoader.item.progress
+            app.dismiss()
+            return JSON.stringify({before: before, after: panelLoader.item.progress, open: panelLoader.item.open})
+        }
+        function instantClose(): void { app.dismiss(true) }
+        function reduce(value: bool): void { motion.reducedMotion = value }
+        function motionState(): string {
+            var p = panelLoader.item
+            return JSON.stringify({open: p.open, mapped: p.visible, progress: p.progress, scale: p.visualScale})
+        }
     }
 ''' , 1))
             environment = dict(os.environ, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
+                               XDG_CONFIG_HOME=str(home / ".config"),
                                QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", CHAUMARCHY_PREVIEW="1")
             environment.pop("WAYLAND_DISPLAY", None)
             environment.pop("DISPLAY", None)
@@ -89,6 +102,28 @@ class NativeSmoke(unittest.TestCase):
                     self.assertEqual(ipc("show").returncode, 0)
                     await_status(lambda state: state["visible"] and state["presentation"] == "panel")
                     if environment["QT_QPA_PLATFORM"] == "wayland":
+                        def test_call(method, *args):
+                            result = subprocess.run(["quickshell", "ipc", "-p", str(ui), "call", "--", "test", method, *args], env=environment, text=True, capture_output=True, check=True, timeout=3)
+                            return json.loads(result.stdout) if result.stdout.strip() else None
+
+                        test_call("instantClose")
+                        test_call("animateOpen")
+                        interrupted = test_call("reverse")
+                        self.assertAlmostEqual(interrupted["before"], interrupted["after"], places=5)
+                        self.assertFalse(interrupted["open"])
+                        test_call("animateOpen")
+                        time.sleep(0.3)
+                        self.assertEqual(test_call("motionState")["progress"], 1)
+                        test_call("reverse")
+                        time.sleep(0.2)
+                        self.assertFalse(test_call("motionState")["mapped"])
+                        test_call("reduce", "true")
+                        test_call("animateOpen")
+                        self.assertEqual(test_call("motionState")["scale"], 1)
+                        test_call("instantClose")
+                        self.assertFalse(test_call("motionState")["mapped"])
+                        test_call("reduce", "false")
+                        test_call("animateOpen")
                         time.sleep(0.2)
                         geometry = subprocess.run(["quickshell", "ipc", "-p", str(ui), "call", "--", "test", "geometry"], env=environment, text=True, capture_output=True, check=True)
                         dimensions = json.loads(geometry.stdout)

@@ -24,6 +24,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 
 ## Implemented and verified
 
+- [x] Refine motion using Emil Kowalski’s guidance: interruptible panel entrance/exit, pointer press feedback, staggered intro, confirmed-success acknowledgment, and reduced motion.
 - [x] Bar-first compact panel, outside-click dismissal, expand/return without recreating payment state, and persistent user plugin installation.
 - [x] Establish the public repository and record planning before wallet implementation.
 - [x] Reuse installed Omarchy controls without modifying packaged source.

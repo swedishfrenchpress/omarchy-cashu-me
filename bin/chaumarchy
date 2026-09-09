@@ -11,6 +11,8 @@ fi
 export CHAUMARCHY_SCANNER="$project_dir/bin/scan-qr"
 export CHAUMARCHY_PREVIEW=0
 export CHAUMARCHY_WINDOW=0
+export CHAUMARCHY_ANIMATE=0
+export CHAUMARCHY_ANCHOR_X=${3:--1}
 export CHAUMARCHY_SCREEN=${2:-}
 ipc_method=show
 ipc_args=()
@@ -18,8 +20,9 @@ if [[ ${1:-} == "--window" ]]; then
   export CHAUMARCHY_WINDOW=1
   ipc_method=expand
 elif [[ ${1:-} == "--toggle" ]]; then
-  ipc_method=toggle
-  ipc_args=("$CHAUMARCHY_SCREEN")
+  export CHAUMARCHY_ANIMATE=1
+  ipc_method=toggleAt
+  ipc_args=("$CHAUMARCHY_SCREEN" "$CHAUMARCHY_ANCHOR_X")
 fi
 if [[ ${1:-} == "--preview" || ${1:-} == "--check" ]]; then
   export CHAUMARCHY_PREVIEW=1
@@ -38,6 +41,12 @@ esac
 if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet "$ipc_method" "${ipc_args[@]}" >/dev/null 2>&1; then
   exit 0
 fi
+# An older running UI may not implement a newly added presentation method.
+# Never mistake that for an absent instance and hot-reload a live wallet.
+if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet status >/dev/null 2>&1; then
+  echo 'Chaumarchy is already running. Quit and reopen it to load this update.' >&2
+  exit 1
+fi
 
 for dependency in quickshell inotifywait; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
@@ -53,7 +62,7 @@ ln -sfn "$omarchy_shell/Commons" "$runtime_dir/Commons"
 ln -sfn "$omarchy_shell/Ui" "$runtime_dir/Ui"
 # Quickshell exposes modules below its config root through the qs.* namespace.
 # Keep packaged Omarchy files untouched and use a private runtime config.
-for source_file in "$project_dir"/ui/*.qml; do
+for source_file in "$project_dir"/ui/*.qml "$project_dir"/ui/*.js; do
   destination="$runtime_dir/$(basename -- "$source_file")"
   if ! cmp -s "$source_file" "$destination"; then cp "$source_file" "$destination"; fi
 done

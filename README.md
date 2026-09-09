@@ -27,6 +27,8 @@ Click the wallet icon to open a compact panel on that monitor. Click outside, pr
 
 Closing the panel or window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
 
+Settings → **Reduce motion** switches to gentle fades without movement. Motion choices and validation are documented in [the motion guide](docs/motion.md).
+
 ## Using the wallet
 
 1. Start with the animated introduction and choose Create wallet. No password or account is required. You can also restore a backup or use recovery words and mint URLs.

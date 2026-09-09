@@ -18,8 +18,9 @@ BarWidget {
             if (launch.running) return
             if (root.bar && root.bar.activePopout) root.bar.activePopout.close()
             var output = root.QsWindow.window ? root.QsWindow.window.screen.name : ""
+            var originX = Math.round(button.mapToItem(root.QsWindow.window.contentItem, button.width / 2, 0).x)
             launch.command = [Quickshell.env("HOME") + "/.local/bin/chaumarchy",
-                              buttonCode === Qt.RightButton ? "--window" : "--toggle", output]
+                              buttonCode === Qt.RightButton ? "--window" : "--toggle", output, String(originX)]
             launch.running = true
         }
     }

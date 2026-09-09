@@ -1,10 +1,17 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
-import qs.Ui as Ui
+import "Motion.js" as Motion
 
 ColumnLayout {
     id: root
+    property bool reducedMotion: false
+    property bool presented: true
+    property bool revealed: false
+    function revealOnce() { if (visible && presented) revealed = true }
+    onVisibleChanged: revealOnce()
+    onPresentedChanged: revealOnce()
+    Component.onCompleted: Qt.callLater(revealOnce)
     property bool ready: false
     property bool busy: false
     property alias createAction: createButton
@@ -17,23 +24,32 @@ ColumnLayout {
         id: mark
         Layout.fillWidth: true
         Layout.preferredHeight: Style.space(116)
-        property real reveal: 0
-        NumberAnimation on reveal {
-            from: 0; to: 1; duration: 1100
-            easing.type: Easing.OutCubic
-            running: root.visible
-        }
         Repeater {
             model: 3
             Rectangle {
                 required property int index
+                id: ring
+                property bool shown: false
+                property real reveal: shown ? 1 : 0
+                Timer { interval: index * Motion.stagger + 1; running: root.revealed; onTriggered: ring.shown = true }
+                Behavior on reveal {
+                    NumberAnimation {
+                        duration: root.reducedMotion ? Motion.gentle : Motion.reveal
+                        easing.type: Easing.BezierSpline
+                        easing.bezierCurve: Motion.easeOut
+                    }
+                }
                 width: Style.space(66); height: width; radius: width / 2
-                x: (mark.width - width) / 2 + (index - 1) * Style.space(25) * mark.reveal
-                y: (mark.height - height) / 2 + (1 - mark.reveal) * Style.space(20 + index * 8)
+                x: (mark.width - width) / 2 + (index - 1) * Style.space(25)
+                y: (mark.height - height) / 2
+                transform: Translate {
+                    x: root.reducedMotion ? 0 : (1 - ring.reveal) * (1 - index) * Style.space(25)
+                    y: root.reducedMotion ? 0 : (1 - ring.reveal) * Style.space(8)
+                }
                 color: "transparent"
                 border.width: 1
                 border.color: Color.foreground
-                opacity: mark.reveal * (index === 1 ? 0.9 : 0.35)
+                opacity: ring.reveal * (index === 1 ? 0.9 : 0.35)
             }
         }
     }
@@ -69,7 +85,8 @@ ColumnLayout {
         wrapMode: Text.WordWrap
     }
     Item { Layout.preferredHeight: Style.space(8) }
-    Ui.Button {
+    MotionButton {
+        reducedMotion: root.reducedMotion
         id: createButton
         objectName: "createWalletButton"
         Layout.fillWidth: true
@@ -81,7 +98,8 @@ ColumnLayout {
         opacity: enabled ? 1 : 0.4
         onClicked: if (enabled) root.createRequested()
     }
-    Ui.Button {
+    MotionButton {
+        reducedMotion: root.reducedMotion
         text: "Restore a wallet"
         Layout.alignment: Qt.AlignHCenter
         focusable: true
