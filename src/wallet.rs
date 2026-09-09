@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::access::Access;
 use crate::diagnostics::{logged, note};
+use crate::rates;
 use bip39::Mnemonic;
 use cdk::cdk_database::WalletDatabase;
 use cdk::nuts::CurrencyUnit;
@@ -34,6 +35,19 @@ struct Settings {
     selected: Option<String>,
     #[serde(default)]
     needs_restore: bool,
+    #[serde(default)]
+    display: Display,
+}
+
+/// Presentation-only preferences. Neither field changes what unit any
+/// amount is stored, sent, or requested in: mints are always sats. Both
+/// default off so an existing wallet's screens read exactly as before.
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Display {
+    #[serde(default)]
+    pub bitcoin_symbol: bool,
+    #[serde(default)]
+    pub fiat_currency: Option<String>,
 }
 
 pub struct Storage {
@@ -83,6 +97,10 @@ pub struct Session {
     access: Access,
     data_key: Zeroizing<String>,
     password_required: bool,
+    // Fetched, never persisted: a stale or missing rate must fall back to
+    // sats, not to a figure written before the last restart.
+    rates: BTreeMap<String, f64>,
+    rates_fetched_at: Option<std::time::Instant>,
 }
 
 pub(crate) fn encrypted_connection(path: &Path, password: &str) -> Result<Connection> {
@@ -227,6 +245,8 @@ impl Session {
             password_required: access.password_required(),
             access,
             data_key: key,
+            rates: BTreeMap::new(),
+            rates_fetched_at: None,
         };
         for mint in &session.settings.mints {
             session
@@ -327,7 +347,68 @@ impl Session {
         Ok(())
     }
 
+    /// Presentation-only: updates neither balances nor any mint's unit.
+    /// Enabling a currency for the first time fetches a rate right away
+    /// rather than waiting for the next reconciliation tick.
+    pub async fn set_display(
+        &mut self,
+        bitcoin_symbol: bool,
+        fiat_currency: Option<String>,
+    ) -> Result<()> {
+        let fiat_currency = match fiat_currency {
+            Some(code) => {
+                let code = code.trim().to_uppercase();
+                if !rates::is_supported(&code) {
+                    return Err("This currency is not offered.");
+                }
+                Some(code)
+            }
+            None => None,
+        };
+        let fetch_now =
+            fiat_currency.is_some() && fiat_currency != self.settings.display.fiat_currency;
+        let previous = std::mem::replace(
+            &mut self.settings.display,
+            Display {
+                bitcoin_symbol,
+                fiat_currency,
+            },
+        );
+        if let Err(error) = self.save_settings() {
+            self.settings.display = previous;
+            return Err(error);
+        }
+        if fetch_now {
+            self.rates_fetched_at = None;
+            self.refresh_rates().await;
+        }
+        Ok(())
+    }
+
+    /// Best-effort and bounded like any other network call this worker
+    /// makes; a failure here is noted for diagnostics and otherwise
+    /// swallowed, leaving the display at "no rate yet" rather than
+    /// interrupting reconciliation or any wallet operation.
+    async fn refresh_rates(&mut self) {
+        if self.settings.display.fiat_currency.is_none() {
+            return;
+        }
+        let stale = self
+            .rates_fetched_at
+            .map(|at| at.elapsed() > Duration::from_secs(300))
+            .unwrap_or(true);
+        if !stale {
+            return;
+        }
+        self.rates_fetched_at = Some(std::time::Instant::now());
+        match rates::fetch_rates().await {
+            Ok(fetched) => self.rates = fetched,
+            Err(error) => note("fetch_rates", &error),
+        }
+    }
+
     pub async fn reconcile(&mut self) {
+        self.refresh_rates().await;
         let mut restored_all = true;
         let needs_restore = self.settings.needs_restore;
         for (url, wallet) in &self.wallets {
@@ -490,9 +571,21 @@ impl Session {
                     "mint":mint.url.clone(),"mint_name":mint.name.clone()}));
             }
         }
+        let exchange_rate = self
+            .settings
+            .display
+            .fiat_currency
+            .as_deref()
+            .and_then(|currency| {
+                self.rates
+                    .get(currency)
+                    .map(|rate| json!({"currency": currency, "rate": rate}))
+            });
         Ok(
             json!({"unlocked":true,"exists":true,"mints":mints,"selected":self.settings.selected,
-            "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"issued_invoices":issued_invoices,"restoring":self.settings.needs_restore}),
+            "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"issued_invoices":issued_invoices,"restoring":self.settings.needs_restore,
+            "display":{"bitcoin_symbol":self.settings.display.bitcoin_symbol,"fiat_currency":self.settings.display.fiat_currency},
+            "currencies":rates::catalog(),"exchange_rate":exchange_rate}),
         )
     }
 
@@ -945,5 +1038,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(session.mnemonic.to_string(), phrase);
+    }
+
+    #[tokio::test]
+    async fn display_settings_are_display_only_and_persist_across_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path()).unwrap();
+        let mut session = Session::create(&storage, "display settings password")
+            .await
+            .unwrap();
+        // A wallet created before this feature existed has no "display" key
+        // in its stored settings JSON; #[serde(default)] must still open it.
+        assert!(!session.settings.display.bitcoin_symbol);
+        assert_eq!(session.settings.display.fiat_currency, None);
+        assert!(session
+            .set_display(true, Some("XYZ".to_owned()))
+            .await
+            .is_err());
+        assert!(!session.settings.display.bitcoin_symbol);
+        // Lowercase and surrounding whitespace are normalized rather than rejected.
+        session
+            .set_display(true, Some(" usd ".to_owned()))
+            .await
+            .unwrap();
+        assert!(session.settings.display.bitcoin_symbol);
+        assert_eq!(
+            session.settings.display.fiat_currency,
+            Some("USD".to_owned())
+        );
+        drop(session);
+        let session = Session::open(&storage, "display settings password")
+            .await
+            .unwrap();
+        assert!(session.settings.display.bitcoin_symbol);
+        assert_eq!(
+            session.settings.display.fiat_currency,
+            Some("USD".to_owned())
+        );
+        // Never a wallet-affecting setting: no mint, no selected mint, and no
+        // balance exist for this test wallet regardless of what is displayed.
+        assert!(session.settings.mints.is_empty());
     }
 }

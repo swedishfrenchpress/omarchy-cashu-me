@@ -41,6 +41,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 - [x] Native UI with real worker: hidden-window automatic receipt, payment review, phrase display, simulated desktop lock clearing, and password unlock.
 - [x] Release build and local desktop installation mechanism.
 - [x] Build/run/recovery documentation and reproducible test-mint instructions.
+- [x] Settings → Display: BIP-177 bitcoin symbol (₿) applied to every shown amount, and an optional local currency with a periodically fetched best-effort exchange rate. Tapping the home balance cycles it between bitcoin and the selected currency; sats remain the only amount ever held or sent.
 
 These checks use disposable wallets and a loopback CDK fake-payment mint. No real funds were used. See [docs/testing.md](docs/testing.md) for commands and test scope.
 
@@ -89,3 +90,5 @@ This file is the progress tracker. Keep its checkboxes, decisions, and next mile
 - **2026-09-09:** User reported stalled setup and changed the onboarding requirement: a simple animated Omarchy-style introduction, with no password gate. Password protection is optional under Security. Device-mode wallets reopen automatically after desktop unlock; protected wallets require their password. Added actual UI-button and security-transition regression tests.
 
 - **2026-09-09:** User selected `cashubtc/wallet` as the primary UX reference. Adapted its main navigation, payment choices, amount/review steps, QR layout, history/detail navigation, mint list, and settings hierarchy. Preserved Omarchy styling and the optional-password onboarding. Mapping and source revision are in `docs/ux-reference.md`.
+
+- **2026-09-09:** User requested a display setting for the BIP-177 bitcoin symbol and an optional local currency, plus tap-to-cycle on the home balance, following cashubtc/wallet and cashu.me's UX. Added Settings → Display with both toggles; the currency list and its exchange rate are fetched with the same per-call timeout discipline as every other network call this worker makes, and are best-effort only — a failed fetch leaves the display in sats rather than surfacing a wallet error. Neither setting changes a mint's unit or any stored/sent amount.

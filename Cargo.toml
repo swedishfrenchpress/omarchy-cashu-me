@@ -25,6 +25,11 @@ fs2 = "0.4"
 libc = "0.2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 base64 = "0.22"
+# Already compiled into the binary: cdk's wallet feature pulls in
+# cdk-http-client, whose default feature is this same crate. Depending on it
+# directly reuses that build instead of adding a second HTTP client, purely
+# for the best-effort, no-secrets local-currency exchange rate lookup.
+bitreq = { version = "0.3.7", default-features = false, features = ["async-https-rustls", "json-using-serde"] }
 
 tempfile = "3"
 

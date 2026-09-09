@@ -23,7 +23,9 @@ artwork, screenshots, or platform styling.
 | QR-first pending screen | QR, amount, mint, expiry, copy action; full bearer text is collapsed. Saved tokens and invoices remain accessible in History. |
 | Confirmed payment result | Dedicated result page for confirmed sends, receives, and reclaim. A displayed Lightning invoice becomes Payment received only when CDK reports it issued. |
 | Mint list and discovery | Mint rows with balances and selection state; four user-selected suggestions, custom URLs, and QR URL entry with explicit trust/add. |
-| Settings rows | Short index linking to Backup & recovery, Security, and Mints. Password remains optional. |
+| Settings rows | Short index linking to Backup & recovery, Security, Mints, and Display. Password remains optional. |
+| Tap balance to switch units | The home balance alone toggles between bitcoin and a selected local currency on tap, as cashu.me's balance does. Sats stay the actual amount everywhere; fiat is a display-only estimate. |
+| BIP-177 bitcoin symbol | Settings → Display offers "₿ 21 000" instead of "21 000 sats" ([bips.dev/177](https://bips.dev/177/)), applied to every amount shown, not only the home balance. |
 
 Omarchy owns fonts, spacing, colors, control borders, focus/hover states, and
 corner radius. The user's animated welcome remains. No iOS/Android palette,

@@ -28,6 +28,8 @@ Ecash sends use CDK's persisted operation record. An unclaimed token can be reco
 
 On unlock and every 30 seconds, each mint runs CDK recovery for incomplete operations, unissued mint quotes, pending melts, pending proofs, and spent-proof checks. Every step runs even when an earlier one fails, so a single unrecoverable operation cannot block the others; the mint keeps a retry status until all of them succeed. Each mint call carries its own timeout, because CDK bounds a request only when that mint advertises a NUT-19 cache window. Balances from an unreachable mint can be stale. Locally reserved/pending funds remain separate from spendable funds.
 
+The same reconciliation tick also refreshes the local-currency exchange rate, only when Settings → Display has a currency enabled, at most once every five minutes. It is bounded by the same per-call timeout discipline as a mint request, sent with no wallet identifying data, and strictly best-effort: a failed or slow fetch is noted for diagnostics and otherwise ignored, leaving amounts displayed in sats rather than surfacing an error or pausing any wallet operation. It never touches a mint, a balance, or what unit a payment is made in.
+
 ## Restoration
 
 Full backups include operation history, pending state, known mints, counters, and the phrase. Imported copies are quarantined from spending until all their mints finish seed scanning and reconciliation. Scanning discovers recoverable outputs missing from an older backup; spent-proof checks remove stale saved balance. A phrase restore starts from known mint URLs and the same deterministic seed, also requiring reconciliation before spending.

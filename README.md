@@ -29,6 +29,8 @@ Closing the panel or window keeps the unlocked wallet monitoring payments every 
 
 Settings → **Reduce motion** switches to gentle fades without movement. Motion choices and validation are documented in [the motion guide](docs/motion.md).
 
+Settings → **Display** offers the [BIP-177](https://bips.dev/177/) bitcoin symbol (₿21 000 instead of 21 000 sats) and an optional local currency. Tap the home balance to switch it between bitcoin and the selected currency. Both are display only: every mint call, and every amount actually held or sent, stays in sats regardless of what is shown.
+
 ## Using the wallet
 
 1. Start with the animated introduction and choose Create wallet. No password or account is required. You can also restore a backup or use recovery words and mint URLs.
