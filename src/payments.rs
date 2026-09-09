@@ -1,5 +1,6 @@
 //! Hold CDK's prepared operation across explicit review. Reconciliation pauses
 //! during review so it cannot cancel the operation awaiting confirmation.
+use crate::diagnostics::note;
 use crate::wallet::{parse_amount, Result, Session};
 use crate::{emit, Request};
 use cdk::nuts::{CurrencyUnit, PaymentMethod, Token};
@@ -11,17 +12,43 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use zeroize::Zeroizing;
 
+/// CDK bounds a mint request only when that mint advertises a NUT-19 cache
+/// window, so every call needs its own timeout here. The worker handles one
+/// request at a time; an unresponsive mint would otherwise freeze the wallet
+/// with no way to cancel from the interface.
+async fn bounded<T, E: std::fmt::Display>(
+    context: &str,
+    seconds: u64,
+    timed_out: &'static str,
+    failed: &'static str,
+    future: impl std::future::Future<Output = std::result::Result<T, E>>,
+) -> Result<T> {
+    match tokio::time::timeout(Duration::from_secs(seconds), future).await {
+        Err(_) => {
+            note(context, &format!("timed out after {seconds}s"));
+            Err(timed_out)
+        }
+        Ok(Err(error)) => {
+            note(context, &error);
+            Err(failed)
+        }
+        Ok(Ok(value)) => Ok(value),
+    }
+}
+
+/// `None` means the desktop locked while the review was on screen. The caller
+/// releases any reservation it holds before the process exits.
 async fn decision(
     id: u64,
     review: Value,
     receiver: &mut Receiver<Zeroizing<String>>,
-) -> (u64, bool) {
+) -> Option<(u64, bool)> {
     emit(json!({"id":id,"result":{"review":review,"review_id":id.to_string()}}));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
     loop {
         let line = match tokio::time::timeout_at(deadline, receiver.recv()).await {
             Ok(Some(line)) => line,
-            _ => return (id, false),
+            _ => return Some((id, false)),
         };
         let request: Request = match serde_json::from_str(&line) {
             Ok(request) => request,
@@ -31,14 +58,14 @@ async fn decision(
             }
         };
         if request.method == "lock" {
-            std::process::exit(0);
+            return None;
         }
         if request.review_id == id.to_string() {
             if request.method == "confirm_payment" {
-                return (request.id, true);
+                return Some((request.id, true));
             }
             if request.method == "cancel_payment" {
-                return (request.id, false);
+                return Some((request.id, false));
             }
         }
         emit(
@@ -58,41 +85,67 @@ pub async fn run(
             "send_ecash" => {
                 let amount = parse_amount(&request.amount)?;
                 let wallet = session.selected_wallet()?;
-                let prepared = wallet.prepare_send(amount, SendOptions::default()).await
-                    .map_err(|_| "Cannot prepare this send. Check available balance, fees, and mint connectivity.")?;
+                let prepared = bounded("prepare_send", 30,
+                    "Preparing this send timed out. Check history and pending transfers before retrying.",
+                    "Cannot prepare this send. Check available balance, fees, and mint connectivity.",
+                    wallet.prepare_send(amount, SendOptions::default())).await?;
                 let operation_id = prepared.operation_id().to_string();
                 let review = json!({"kind":"Send ecash","mint":wallet.mint_url.to_string(),
                     "amount":amount.to_string(),"fee":prepared.fee().to_string(),"total":(amount + prepared.fee()).to_string()});
-                let (id, confirmed) = decision(request.id, review, receiver).await;
+                let Some((id, confirmed)) = decision(request.id, review, receiver).await else {
+                    // Release the reservation before locking rather than leaving
+                    // it stranded until the next reconciliation.
+                    let _ = tokio::time::timeout(Duration::from_secs(10), prepared.cancel()).await;
+                    std::process::exit(0);
+                };
                 reply_id = id;
                 if !confirmed {
-                    prepared.cancel().await.map_err(|_| "Cancellation needs reconciliation. Funds remain reserved until checked.")?;
+                    bounded("send cancel", 15,
+                        "Cancellation needs reconciliation. Funds remain reserved until checked.",
+                        "Cancellation needs reconciliation. Funds remain reserved until checked.",
+                        prepared.cancel()).await?;
                     return Ok(json!({"cancelled":true}));
                 }
-                let token = prepared.confirm(None).await
-                    .map_err(|_| "Send outcome needs reconciliation. Check history and pending transfers before retrying.")?;
+                let token = prepared.confirm(None).await.map_err(|error| {
+                    note("send confirm", &error);
+                    "Send outcome needs reconciliation. Check history and pending transfers before retrying."
+                })?;
                 Ok(json!({"token":token.to_string(),"amount":amount.to_string(),"operation_id":operation_id,"mint":wallet.mint_url.to_string()}))
             }
             "pay_invoice" => {
                 let wallet = session.selected_wallet()?;
                 let invoice = request.text.trim().strip_prefix("lightning:").unwrap_or(request.text.trim());
-                let quote = wallet.melt_quote(PaymentMethod::BOLT11, invoice, None, None).await
-                    .map_err(|_| "Cannot quote this invoice. Check its validity, expiry, and mint availability.")?;
-                let prepared = wallet.prepare_melt(&quote.id, HashMap::new()).await
-                    .map_err(|_| "Cannot reserve funds for this invoice. Check available balance and fees.")?;
+                let quote = bounded("melt_quote", 30,
+                    "Quoting this invoice timed out. Check the mint's availability before retrying.",
+                    "Cannot quote this invoice. Check its validity, expiry, and mint availability.",
+                    wallet.melt_quote(PaymentMethod::BOLT11, invoice, None, None)).await?;
+                let prepared = bounded("prepare_melt", 30,
+                    "Reserving funds for this invoice timed out. Check history before retrying.",
+                    "Cannot reserve funds for this invoice. Check available balance and fees.",
+                    wallet.prepare_melt(&quote.id, HashMap::new())).await?;
                 let fee = prepared.total_fee() + quote.fee_reserve;
                 let review = json!({"kind":"Pay Lightning invoice","mint":wallet.mint_url.to_string(),
                     "amount":quote.amount.to_string(),"fee":fee.to_string(),"total":(quote.amount+fee).to_string(),"expiry":quote.expiry});
-                let (id, confirmed) = decision(request.id, review, receiver).await;
+                let Some((id, confirmed)) = decision(request.id, review, receiver).await else {
+                    let _ = tokio::time::timeout(Duration::from_secs(10), prepared.cancel()).await;
+                    std::process::exit(0);
+                };
                 reply_id = id;
                 if !confirmed {
-                    prepared.cancel().await.map_err(|_| "Cancellation needs reconciliation. Funds remain reserved until checked.")?;
+                    bounded("melt cancel", 15,
+                        "Cancellation needs reconciliation. Funds remain reserved until checked.",
+                        "Cancellation needs reconciliation. Funds remain reserved until checked.",
+                        prepared.cancel()).await?;
                     return Ok(json!({"cancelled":true}));
                 }
-                let paid = tokio::time::timeout(Duration::from_secs(90), prepared.confirm()).await
-                    .map_err(|_| "Payment is unresolved. Background reconciliation will check its outcome; do not pay it again.")?
-                    .map_err(|_| "Payment did not complete normally. Check history while the wallet reconciles its outcome.")?;
-                if paid.state() != cdk::nuts::MeltQuoteState::Paid { return Err("Payment is not confirmed paid. Wait for reconciliation."); }
+                let paid = bounded("melt confirm", 90,
+                    "Payment is unresolved. Background reconciliation will check its outcome; do not pay it again.",
+                    "Payment did not complete normally. Check history while the wallet reconciles its outcome.",
+                    prepared.confirm()).await?;
+                if paid.state() != cdk::nuts::MeltQuoteState::Paid {
+                    note("melt confirm", &format!("mint reported state {:?}", paid.state()));
+                    return Err("Payment is not confirmed paid. Wait for reconciliation.");
+                }
                 Ok(json!({"paid":true,"amount":quote.amount.to_string(),"fee":paid.fee_paid().to_string()}))
             }
             "receive_token" => {
@@ -102,22 +155,32 @@ pub async fn run(
                 let wallet = session.wallet_for(&mint_url)?;
                 let amount = token.value().map_err(|_| "Cannot read token amount.")?;
                 let review = json!({"kind":"Receive ecash","mint":mint_url,"amount":amount.to_string(),"receiving":true});
-                let (id, confirmed) = decision(request.id, review, receiver).await;
+                let Some((id, confirmed)) = decision(request.id, review, receiver).await else {
+                    std::process::exit(0);
+                };
                 reply_id = id;
                 if !confirmed { return Ok(json!({"cancelled":true})); }
-                let received = wallet.receive(request.text.trim(), ReceiveOptions::default()).await
-                    .map_err(|_| "Token could not be redeemed. It may be spent, unsupported, or awaiting mint reconciliation.")?;
+                let received = bounded("receive", 60,
+                    "Receiving is unresolved. Background reconciliation will check its outcome; do not redeem this token again.",
+                    "Token could not be redeemed. It may be spent, unsupported, or awaiting mint reconciliation.",
+                    wallet.receive(request.text.trim(), ReceiveOptions::default())).await?;
                 Ok(json!({"received":true,"amount":received.to_string()}))
             }
             "reclaim_token" => {
-                let wallet = session.selected_wallet()?;
+                // Resolve the transfer's own mint: unclaimed ecash is reclaimable
+                // whichever mint happens to be selected.
+                let wallet = session.wallet_for_operation(&request.operation_id).await?;
                 let operation_id = request.operation_id.parse().map_err(|_| "Invalid transfer reference.")?;
                 let review = json!({"kind":"Reclaim unspent ecash","mint":wallet.mint_url.to_string(),"reclaim":true});
-                let (id, confirmed) = decision(request.id, review, receiver).await;
+                let Some((id, confirmed)) = decision(request.id, review, receiver).await else {
+                    std::process::exit(0);
+                };
                 reply_id = id;
                 if !confirmed { return Ok(json!({"cancelled":true})); }
-                let amount = wallet.revoke_send(operation_id).await
-                    .map_err(|_| "Cannot reclaim this token. It may already be spent; the wallet will reconcile its status.")?;
+                let amount = bounded("revoke_send", 30,
+                    "Reclaim is unresolved. The wallet will reconcile this transfer's status.",
+                    "Cannot reclaim this token. It may already be spent; the wallet will reconcile its status.",
+                    wallet.revoke_send(operation_id)).await?;
                 Ok(json!({"reclaimed":true,"amount":amount.to_string()}))
             }
             _ => Err("Unknown payment operation.")

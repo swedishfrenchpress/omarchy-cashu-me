@@ -13,12 +13,12 @@ artwork, screenshots, or platform styling.
 | Reference pattern | Chaumarchy adaptation |
 | --- | --- |
 | Wallet / History / Mints tabs | Persistent native navigation on the three main pages; Ctrl+1/2/3 shortcuts. |
-| Mint selector above balance | Centered selected-mint control and balance; Receive before Send. Each mint keeps its own balance. |
+| Mint selector above balance | The wallet page shows the total balance across mints, as Cashu.me does; the Mints page lists each mint's balance and marks the mint used for new payments. Receive before Send. |
 | Small recent activity section | Three recent rows and View all activity; direction, amount, and status remain explicit. |
-| History list and transaction detail | Date grouping, text search, incoming/outgoing filters, and detail pages showing amount, fee, status, date, and mint. The current backend supplies up to 100 recent transactions per mint. |
+| History list and transaction detail | Date grouping, text search, incoming/outgoing filters, and detail pages showing amount, fee, status, date, and mint. History spans every mint; the backend supplies the 100 most recent transactions across them. Dates use the Omarchy clock format from shell.json without the year; detail pages add its time part. |
 | Payment-method chooser | Invoice entry plus Scan/Send ecash choices; separate Lightning/Ecash/Scan receive choices. Unsupported methods are not offered. |
 | Amount-first flow | Large sats entry, mint selector, available balance, and a distinct review step. Desktop keyboard entry replaces a touch keypad. |
-| Task-focused sheets | Focused native pages within the existing window, with Back/Escape navigation and guarded confirmation. No mobile drag gestures or glass styling. |
+| Task-focused sheets | Focused native pages within the existing window. A back arrow sits at the top left; Scan and Settings are icons beside the expand control at the top right. Escape and Alt+Left also go back, and confirmation is guarded. No mobile drag gestures or glass styling. |
 | Precise payment review | Mint, amount, maximum fees and total, plus a specific Pay invoice/Create token/Receive ecash/Reclaim ecash action. |
 | QR-first pending screen | QR, amount, mint, expiry, copy action; full bearer text is collapsed. Saved tokens and invoices remain accessible in History. |
 | Confirmed payment result | Dedicated result page for confirmed sends, receives, and reclaim. A displayed Lightning invoice becomes Payment received only when CDK reports it issued. |

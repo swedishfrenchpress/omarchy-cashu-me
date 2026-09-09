@@ -19,7 +19,10 @@ def cleanup(signum=None, frame=None):
             child.kill()
             child.wait()
     if signum is not None:
-        raise SystemExit(0)
+        # A cancelled scan is not a successful scan. Reporting zero here let a
+        # caller checking the exit status treat a killed scanner as a result.
+        print(json.dumps({"error": "Scanning was cancelled."}))
+        raise SystemExit(1)
 
 
 def run(command, timeout=60):
@@ -29,13 +32,19 @@ def run(command, timeout=60):
         output, _ = child.communicate(timeout=timeout)
         if child.returncode != 0:
             raise ValueError("No QR code was read, or scanning was cancelled.")
-        return output.decode("utf-8").strip()
+        try:
+            return output.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            # Never let decoded payload bytes reach the error channel.
+            raise ValueError("The QR code did not contain readable text.") from None
     finally:
         cleanup()
 
 
-signal.signal(signal.SIGTERM, cleanup)
-signal.signal(signal.SIGINT, cleanup)
+# SIGHUP arrives on session teardown. Without a handler the interpreter dies
+# without unwinding, stranding the captured QR image and orphaning the child.
+for received in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+    signal.signal(received, cleanup)
 try:
     mode = sys.argv[1]
     if mode == "camera":

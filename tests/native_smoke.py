@@ -139,6 +139,12 @@ class NativeSmoke(unittest.TestCase):
                     self.assertNotIn("ReferenceError", output)
                     self.assertNotIn("TypeError", output)
                     self.assertNotIn("Failed to load configuration", output)
+                    # The offscreen checks above have all run. The panel and
+                    # motion assertions cannot, so report a skip rather than a
+                    # pass: an unqualified OK here would otherwise look like
+                    # coverage of the motion behaviour it never exercised.
+                    if environment["QT_QPA_PLATFORM"] != "wayland":
+                        self.skipTest("panel geometry and motion checks need CHAUMARCHY_TEST_WAYLAND=1 on a running Wayland desktop")
                 finally:
                     if process.poll() is None:
                         process.terminate()

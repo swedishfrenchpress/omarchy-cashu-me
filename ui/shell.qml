@@ -6,6 +6,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui as Ui
+import "ClockFormat.js" as ClockFormat
 
 ShellRoot {
     id: app
@@ -16,10 +17,28 @@ ShellRoot {
     property bool presented: true
     property string outputName: Quickshell.env("CHAUMARCHY_SCREEN") || ""
     property double dismissedAt: 0
+    // Secrets never survive hiding. Navigation and a prepared payment do: the
+    // panel is dismissed casually and reopened from the bar, and a review must
+    // stay reviewable across that.
+    function clearSecrets() {
+        backend.recoveryPhrase = ""
+        revealShare = false
+        receiveText = ""
+        clipboardText = ""
+        password.clear()
+        securityPassword.clear()
+        securityConfirmation.clear()
+        currentPassword.clear()
+        backupPassword.clear()
+        backupConfirmation.clear()
+        restorePassword.clear()
+        restoreWords.clear()
+        restoreMints.clear()
+    }
     function dismiss(immediate, outside) {
         if (immediate === true) presentationMotion = false
         presented = false
-        backend.recoveryPhrase = ""
+        clearSecrets()
         scanner.running = false
         dismissedAt = outside === true ? Date.now() : 0
     }
@@ -37,11 +56,16 @@ ShellRoot {
     readonly property bool mainPage: ["home", "history", "mints"].indexOf(page) >= 0
     readonly property var activity: (backend.state.history || []).filter(tx => {
         var direction = historyFilter === "all" || (historyFilter === "received" ? tx.direction === "Incoming" : tx.direction === "Outgoing")
-        return direction && (tx.kind + " " + tx.status + " " + tx.amount).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
+        return direction && (tx.kind + " " + tx.status + " " + tx.amount + " " + (tx.mint_name || "")).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
     })
     function sats(value) { return String(value || "0").replace(/\B(?=(\d{3})+(?!\d))/g, " ") }
     function titleFor(tx) { return (tx.kind || "Payment") + (tx.direction === "Incoming" ? " received" : " sent") }
-    function dayFor(tx) { return tx && tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : "" }
+    // Dates follow the Omarchy clock format in shell.json, without the year.
+    property var clockSettings: ({})
+    readonly property string dateFormat: ClockFormat.dateFormat(clockSettings.format || ClockFormat.defaultFormat, clockSettings.formatAlt || ClockFormat.defaultAltFormat)
+    readonly property string timeFormat: ClockFormat.timeFormat(clockSettings.format || ClockFormat.defaultFormat)
+    function dayFor(tx) { return tx && tx.timestamp ? ClockFormat.format(new Date(tx.timestamp * 1000), dateFormat) : "" }
+    function momentFor(seconds) { return seconds ? ClockFormat.format(new Date(seconds * 1000), dateFormat + " " + timeFormat) : "" }
     function go(destination) {
         if (backend.busy || backend.review) return
         if (destination === "scan") scanTarget = "payment"
@@ -82,10 +106,30 @@ ShellRoot {
     property string receiveText: ""
     property string scanTarget: "send"
     property string clipboardText: ""
+    property bool copyCancelled: false
+    // Re-evaluated while a review is open so an expired quote is visible: the
+    // worker pauses its state pushes for the whole 300 s review window.
+    property double now: Date.now()
+    readonly property bool reviewExpired: !!backend.review && !!backend.review.expiry && backend.review.expiry * 1000 < app.now
     readonly property bool walletVisible: backend.preview || backend.unlocked
     readonly property var selectedMint: {
         var mints = backend.state.mints || []
         return mints.find(mint => mint.url === backend.state.selected) || {name: "No mint selected", spendable: "0", pending: "0", reserved: "0"}
+    }
+    readonly property var mints: backend.state.mints || []
+    function total(field) { return app.mints.reduce((sum, mint) => sum + Number(mint[field] || 0), 0) }
+    readonly property double totalSpendable: total("spendable")
+    readonly property double totalPending: total("pending")
+    readonly property double totalReserved: total("reserved")
+    readonly property var unavailableMints: app.mints.filter(mint => mint.sync === "retrying")
+    FileView {
+        path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
+        watchChanges: true
+        printErrors: false
+        function apply() { try { app.clockSettings = ClockFormat.clockSettings(JSON.parse(text())) } catch (_) { app.clockSettings = {} } }
+        onLoaded: apply()
+        onFileChanged: reload()
+        onLoadFailed: app.clockSettings = {}
     }
     ThemeSync {}
     WalletBackend {
@@ -96,26 +140,27 @@ ShellRoot {
         onReadyChanged: app.maybeOpen()
         onStateChanged: app.maybeOpen()
         onErrorChanged: if (backend.error) contentScroll.contentItem.contentY = 0
+        // Clearing a submitted secret waits for the worker to accept it: a
+        // rejected recovery phrase used to be wiped, forcing the user to retype
+        // every word from paper.
+        onSucceeded: method => {
+            if (method === "unlock" || method === "create") password.clear()
+            if (method === "restore_phrase") { restoreWords.clear(); restoreMints.clear() }
+            if (method === "restore_backup") restorePassword.clear()
+            if (method === "export_backup") { backupPassword.clear(); backupConfirmation.clear() }
+            if (method === "set_password") { securityPassword.clear(); securityConfirmation.clear() }
+            if (method === "remove_password") currentPassword.clear()
+        }
         onLocked: {
             app.page = "home"
             app.trail = []
             app.transaction = {}
-            app.revealShare = false
             app.automaticOpenAttempted = false
             app.paymentText = ""
             app.amountText = ""
-            password.clear()
-            securityPassword.clear()
-            securityConfirmation.clear()
-            currentPassword.clear()
-            backupPassword.clear()
-            backupConfirmation.clear()
-            restorePassword.clear()
-            restoreWords.clear()
-            restoreMints.clear()
-            app.receiveText = ""
-            app.clipboardText = ""
+            app.clearSecrets()
             scanner.running = false
+            app.copyCancelled = true
             clipboard.running = false
             exportDialog.close()
             importDialog.close()
@@ -148,8 +193,6 @@ ShellRoot {
         defaultSuffix: "backup"
         onAccepted: {
             backend.request("export_backup", {path: decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, "")), password: backupPassword.text})
-            backupPassword.clear()
-            backupConfirmation.clear()
         }
     }
     FileDialog {
@@ -189,7 +232,16 @@ ShellRoot {
         command: ["wl-copy", "--foreground", "--sensitive", "--paste-once", "--type", "text/plain"]
         stdinEnabled: true
         onStarted: { write(app.clipboardText); stdinEnabled = false; app.clipboardText = "" }
+        // wl-copy holds the selection until it is pasted once. A non-zero exit
+        // means the copy never happened, which was previously indistinguishable
+        // from success and left the user pasting an empty clipboard.
+        onExited: (code, status) => {
+            app.clipboardText = ""
+            if (code !== 0 && !app.copyCancelled) backend.error = "Could not copy. Check that wl-copy is available, or use Show full text."
+            app.copyCancelled = false
+        }
     }
+    Timer { running: !!backend.review; interval: 1000; repeat: true; onTriggered: app.now = Date.now() }
     FileDialog {
         id: importDialog
         title: "Choose a Chaumarchy backup"
@@ -236,6 +288,12 @@ ShellRoot {
         bordered: true
         opacity: enabled ? 1 : 0.4
         Layout.minimumHeight: Style.space(38)
+    }
+    component IconButton: Button {
+        text: ""
+        focusable: true
+        tooltipText: Accessible.name
+        opacity: enabled ? 1 : 0.4
     }
     component Divider: Rectangle {
         Layout.fillWidth: true
@@ -304,7 +362,9 @@ ShellRoot {
             item.privacyHidden = Qt.binding(() => !backend.preview && !desktopLock.safeToUnlock)
             item.anchorX = Qt.binding(() => app.anchorX)
             item.outputName = Qt.binding(() => app.outputName)
-            item.suspendDismissal = Qt.binding(() => exportDialog.visible || importDialog.visible || imageDialog.visible || scanner.running)
+            // A review holds reserved funds. Require an explicit confirm or
+            // cancel rather than hiding it on a stray click outside the panel.
+            item.suspendDismissal = Qt.binding(() => exportDialog.visible || importDialog.visible || imageDialog.visible || scanner.running || !!backend.review)
             item.dismissed.connect(() => app.dismiss(false, true))
         }
     }
@@ -312,7 +372,8 @@ ShellRoot {
         id: window
         title: backend.preview ? "Chaumarchy — interface preview" : "Chaumarchy"
         visible: app.presented && !app.compact
-        onVisibleChanged: if (!visible && !app.compact) app.presented = false
+        // Closing the window clears secrets exactly as hiding the panel does.
+        onVisibleChanged: if (!visible && !app.compact) app.dismiss(true)
         implicitWidth: Style.space(460)
         implicitHeight: Style.space(620)
         minimumSize: Qt.size(340, 420)
@@ -324,7 +385,7 @@ ShellRoot {
             anchors.fill: parent
             color: app.compact ? Color.popups.background : Color.background
             Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-            Shortcut { sequence: "Escape"; onActivated: app.compact ? app.dismiss(true) : app.back() }
+            Shortcut { sequence: "Escape"; onActivated: backend.review ? app.back() : (app.compact ? app.dismiss(true) : app.back()) }
             Shortcut { sequence: "Alt+Left"; onActivated: app.back() }
             Shortcut { sequence: "Ctrl+1"; enabled: app.walletVisible; onActivated: app.tab("home") }
             Shortcut { sequence: "Ctrl+2"; enabled: app.walletVisible; onActivated: app.tab("history") }
@@ -345,27 +406,21 @@ ShellRoot {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
-                    Button {
-                        text: app.compact ? "↗" : "↙"
-                        Accessible.name: app.compact ? "Expand to window" : "Return to panel"
-                        tooltipText: Accessible.name
-                        focusable: true
-                        onClicked: app.present(app.compact)
-                    }
-                    Button { text: "×"; Accessible.name: "Hide wallet"; focusable: true; onClicked: app.dismiss() }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: app.walletVisible
-                    Label { text: ({home: "Wallet", history: "History", mints: "Mints"})[app.page] || ""; opacity: 0.55; Layout.fillWidth: true }
-                    Button { text: "Scan"; visible: app.walletVisible && app.mainPage; enabled: !backend.busy; focusable: true; onClicked: app.go("scan") }
-                    Button {
+                    spacing: Style.space(6)
+                    IconButton {
+                        visible: app.walletVisible && !app.mainPage
                         enabled: !backend.review && !backend.busy
-                        visible: app.walletVisible
-                        text: app.mainPage ? "Settings" : "← Back"
-                        focusable: true
-                        onClicked: app.mainPage ? app.go("settings") : app.back()
+                        iconText: "󰁍"
+                        Accessible.name: "Back"
+                        onClicked: app.back()
+                    }
+                    Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
+                    IconButton { visible: app.walletVisible && app.mainPage; enabled: !backend.busy; iconText: "󰐲"; Accessible.name: "Scan a QR code"; onClicked: app.go("scan") }
+                    IconButton { visible: app.walletVisible && app.mainPage; enabled: !backend.review && !backend.busy; iconText: "󰒓"; Accessible.name: "Settings"; onClicked: app.go("settings") }
+                    IconButton {
+                        iconText: app.compact ? "󰁜" : "󰁃"
+                        Accessible.name: app.compact ? "Expand to window" : "Return to panel"
+                        onClicked: app.present(app.compact)
                     }
                 }
 
@@ -400,7 +455,7 @@ ShellRoot {
                         Layout.fillWidth: true
                         enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock
                             && (backend.state.password_required === false || password.text.length > 0)
-                        onClicked: { backend.request("unlock", {password: password.text}); password.clear() }
+                        onClicked: backend.request("unlock", {password: password.text})
                     }
                 }
                 Label { visible: !app.walletVisible && !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
@@ -442,7 +497,6 @@ ShellRoot {
                         enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock && restoreWords.text.trim() !== "" && restoreMints.text.trim() !== ""
                         onClicked: {
                             backend.request("restore_phrase", {phrase: restoreWords.text.trim().replace(/\s+/g, " "), mint_urls: restoreMints.text.trim().split(/\s+/)})
-                            restoreWords.clear(); restoreMints.clear()
                         }
                     }
                     Label { visible: app.phraseRestore && !backend.state.exists; text: "Use your original mint URLs. Recovery scans those mints for unspent ecash; it cannot recover your full history or every pending operation. Stop using the old wallet before recovery."; Layout.fillWidth: true; opacity: 0.65 }
@@ -455,7 +509,6 @@ ShellRoot {
                         enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock && restorePassword.text.length > 0
                         onClicked: {
                             backend.request("restore_backup", {path: app.restorePath, backup_password: restorePassword.text})
-                            restorePassword.clear()
                         }
                     }
                     Button { text: "Back"; focusable: true; onClicked: app.restoreMode = false }
@@ -475,11 +528,13 @@ ShellRoot {
                     DetailRow { heading: "Mint"; value: backend.review ? backend.review.mint : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.fee; heading: "Maximum fee"; value: backend.review ? app.sats(backend.review.fee) + " sats" : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.total; heading: "Maximum total"; value: backend.review ? app.sats(backend.review.total) + " sats" : "" }
+                    DetailRow { visible: !!backend.review && !!backend.review.expiry; heading: "Quote expires"; value: backend.review && backend.review.expiry ? app.momentFor(backend.review.expiry) : "" }
                     Label { visible: !!backend.review && backend.review.receiving === true; text: "The mint may deduct an input fee. You will see the amount received after redemption."; Layout.fillWidth: true; opacity: 0.65 }
+                    Label { visible: app.reviewExpired; text: "This quote has expired. Cancel it and create the payment again."; Layout.fillWidth: true; opacity: 0.8 }
                     Action {
                         id: confirmButton
                         text: backend.busy ? "Processing…" : (!backend.review ? "Confirm" : backend.review.reclaim ? "Reclaim ecash" : backend.review.receiving ? "Receive ecash" : backend.review.kind === "Send ecash" ? "Create token" : "Pay invoice")
-                        enabled: !backend.busy
+                        enabled: !backend.busy && !app.reviewExpired
                         Layout.fillWidth: true
                         onClicked: backend.request("confirm_payment", {review_id: backend.reviewId})
                     }
@@ -489,12 +544,11 @@ ShellRoot {
                     visible: app.walletVisible && !backend.review && app.page === "home"
                     Layout.fillWidth: true
                     spacing: Style.space(app.compact ? 14 : 22)
-                    Item { Layout.preferredHeight: Style.space(app.compact ? 0 : 10) }
-                    Button { text: app.selectedMint.name + "  ⌄"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.go("mints") }
-                    Label { text: app.sats(app.selectedMint.spendable); font.pixelSize: Style.space(app.compact ? 46 : 54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Item { Layout.preferredHeight: Style.space(app.compact ? 12 : 26) }
+                    Label { text: app.sats(app.totalSpendable); font.pixelSize: Style.space(app.compact ? 46 : 54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: backend.state.restoring === true; text: "Recovering from your mints…"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
-                    Label { visible: app.selectedMint.sync === "retrying"; text: "Mint unavailable. Balance may be out of date."; Layout.fillWidth: true; opacity: 0.6 }
+                    Label { visible: app.unavailableMints.length > 0; text: (app.unavailableMints.length === 1 ? app.unavailableMints[0].name + " is unavailable." : app.unavailableMints.length + " mints are unavailable.") + " Balance may be out of date."; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.space(12)
@@ -502,7 +556,7 @@ ShellRoot {
                         Action { text: "↑  Send"; Layout.fillWidth: true; onClicked: app.go("send") }
                     }
                     Entry { visible: !(backend.state.mints || []).length; heading: "Choose your first mint"; detail: "A mint issues and redeems your ecash."; onClicked: app.go("add_mint") }
-                    Entry { visible: app.selectedMint.pending !== "0" || app.selectedMint.reserved !== "0"; heading: "Pending activity"; detail: app.sats(app.selectedMint.pending) + " pending · " + app.sats(app.selectedMint.reserved) + " reserved"; onClicked: app.tab("history") }
+                    Entry { visible: app.totalPending > 0 || app.totalReserved > 0; heading: "Pending activity"; detail: app.sats(app.totalPending) + " pending · " + app.sats(app.totalReserved) + " reserved"; onClicked: app.tab("history") }
                     Divider {}
                     Label { text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
                     Label { visible: !(backend.state.history || []).length; text: "No payments yet"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
@@ -513,7 +567,7 @@ ShellRoot {
                             heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
                             detail: app.dayFor(modelData) + " · " + modelData.status
                             trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.sats(modelData.amount) + " sats"
-                            onClicked: { app.transaction = Object.assign({mint: app.selectedMint.url}, modelData); app.go("transaction") }
+                            onClicked: { app.transaction = modelData; app.go("transaction") }
                         }
                     }
                     Button { text: "View all activity  ›"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
@@ -523,7 +577,6 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(16)
                     RowLayout { Layout.fillWidth: true; Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true } Button { text: "Refresh"; focusable: true; enabled: !backend.busy; onClicked: backend.request("sync") } }
-                    MintPicker {}
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
                     RowLayout {
                         Layout.fillWidth: true
@@ -541,20 +594,20 @@ ShellRoot {
                             Label { visible: index === 0 || app.dayFor(modelData) !== app.dayFor(app.activity[index - 1]); text: app.dayFor(modelData); opacity: 0.55; font.pixelSize: Style.font.caption }
                             Entry {
                                 heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
-                                detail: modelData.status
+                                detail: modelData.status + (app.mints.length > 1 && modelData.mint_name ? " · " + modelData.mint_name : "")
                                 trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.sats(modelData.amount) + " sats"
-                                onClicked: { app.transaction = Object.assign({mint: app.selectedMint.url}, modelData); app.go("transaction") }
+                                onClicked: { app.transaction = modelData; app.go("transaction") }
                             }
                         }
                     }
-                    Label { text: "Showing up to 100 recent payments for this mint."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    Label { text: "Showing up to 100 recent payments across your mints."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
                     Label { visible: (backend.state.pending_invoices || []).length > 0; text: "Pending invoices"; font.bold: true }
                     Repeater {
                         model: backend.state.pending_invoices || []
                         delegate: RowLayout {
                             required property var modelData
                             Layout.fillWidth: true
-                            Label { text: modelData.amount + " sats · " + (modelData.expiry * 1000 < Date.now() ? "expired" : "awaiting payment"); Layout.fillWidth: true }
+                            Label { text: modelData.amount + " sats · " + (modelData.expiry * 1000 < Date.now() ? "expired" : "awaiting payment") + (app.mints.length > 1 && modelData.mint_name ? " · " + modelData.mint_name : ""); Layout.fillWidth: true }
                             Action { text: "Show"; enabled: !backend.busy; onClicked: backend.request("show_invoice", {operation_id: modelData.id}) }
                         }
                     }
@@ -564,7 +617,7 @@ ShellRoot {
                         delegate: ColumnLayout {
                             required property var modelData
                             Layout.fillWidth: true
-                            Label { text: modelData.amount ? app.sats(modelData.amount) + " sats · pending ecash" : "Pending ecash"; Layout.fillWidth: true }
+                            Label { text: (modelData.amount ? app.sats(modelData.amount) + " sats · pending ecash" : "Pending ecash") + (app.mints.length > 1 && modelData.mint_name ? " · " + modelData.mint_name : ""); Layout.fillWidth: true }
                             RowLayout { Layout.fillWidth: true
                             Action { text: "Show token"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("show_pending_token", {operation_id: modelData.id}) }
                             Action { text: "Reclaim"; enabled: !backend.busy; Layout.fillWidth: true; onClicked: backend.request("reclaim_token", {operation_id: modelData.id}) }
@@ -581,8 +634,8 @@ ShellRoot {
                     Label { text: app.sats(app.transaction.amount) + " sats"; font.pixelSize: Style.space(38); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     DetailRow { heading: "Status"; value: app.transaction.status || "" }
                     DetailRow { heading: "Fee"; value: app.sats(app.transaction.fee) + " sats" }
-                    DetailRow { heading: "Date"; value: app.transaction.timestamp ? new Date(app.transaction.timestamp * 1000).toLocaleString() : "" }
-                    DetailRow { heading: "Mint"; value: app.transaction.mint || "" }
+                    DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
+                    DetailRow { heading: "Mint"; value: app.transaction.mint_name || app.transaction.mint || "" }
                     Divider {}
                     Label { text: "Transfer reference"; opacity: 0.6 }
                     Label { text: app.transaction.id || ""; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
@@ -664,7 +717,7 @@ ShellRoot {
                     Label { text: app.sats(backend.share.amount) + " sats"; visible: !!backend.share.amount; font.pixelSize: Style.space(32); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     DetailRow { heading: "Mint"; value: backend.share.mint || app.selectedMint.name }
-                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: new Date((backend.share.expiry || 0) * 1000).toLocaleString() }
+                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry) }
                     Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
                         text: clipboard.running ? "Copied · waiting for paste" : backend.share.token ? "Copy token" : "Copy invoice"
@@ -711,11 +764,11 @@ ShellRoot {
                             trailing: app.sats(modelData.spendable) + " sats" + (modelData.url === backend.state.selected ? " ✓" : "")
                             selected: modelData.url === backend.state.selected
                             enabled: !backend.busy
-                            onClicked: { backend.request("select_mint", {url: modelData.url}); app.page = "home"; app.trail = [] }
+                            onClicked: backend.request("select_mint", {url: modelData.url})
                         }
                     }
                     Entry { heading: "+  Add a mint"; detail: "Choose a suggestion or use a mint URL."; onClicked: app.go("add_mint") }
-                    Label { text: "Each mint holds a separate balance. Choose one to view its activity and make payments."; opacity: 0.6; Layout.fillWidth: true }
+                    Label { text: "Each mint holds a separate balance; the wallet shows their total. The checked mint is used for new payments, and you can switch it when entering an amount."; opacity: 0.6; Layout.fillWidth: true }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "add_mint"
@@ -750,7 +803,7 @@ ShellRoot {
                     }
                     Divider {}
                     Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
-                    Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked; Layout.fillWidth: true; onClicked: backend.lock() }
+                    Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked && !backend.busy && !backend.review; Layout.fillWidth: true; onClicked: backend.lock() }
                     Button { text: "Quit Chaumarchy"; focusable: true; onClicked: Qt.quit() }
                 }
                 ColumnLayout {
@@ -763,7 +816,12 @@ ShellRoot {
                             : "Password protection is optional. Without it, anyone using your desktop account can open this wallet."
                         opacity: 0.65; Layout.fillWidth: true
                     }
-                    Ui.TextField { id: securityPassword; visible: !backend.state.password_required; password: true; placeholderText: "New password (12+ characters)"; Layout.fillWidth: true }
+                    Label {
+                        visible: !backend.state.password_required
+                        text: "If someone copies your wallet folder, this password is the only thing protecting it. Several random words make a far stronger passphrase than a short complicated one."
+                        opacity: 0.65; Layout.fillWidth: true
+                    }
+                    Ui.TextField { id: securityPassword; visible: !backend.state.password_required; password: true; placeholderText: "New passphrase (12+ characters)"; Layout.fillWidth: true }
                     Ui.TextField { id: securityConfirmation; visible: !backend.state.password_required; password: true; placeholderText: "Repeat password"; Layout.fillWidth: true }
                     Action {
                         id: enablePasswordButton
@@ -771,7 +829,7 @@ ShellRoot {
                         text: "Enable password"
                         Layout.fillWidth: true
                         enabled: backend.unlocked && !backend.busy && securityPassword.text.length >= 12 && securityPassword.text === securityConfirmation.text
-                        onClicked: { backend.request("set_password", {password: securityPassword.text}); securityPassword.clear(); securityConfirmation.clear() }
+                        onClicked: backend.request("set_password", {password: securityPassword.text})
                     }
                     Label { visible: !backend.state.password_required && securityConfirmation.text.length > 0 && securityPassword.text !== securityConfirmation.text; text: "Passwords do not match."; Layout.fillWidth: true; opacity: 0.65 }
                     Ui.TextField { id: currentPassword; visible: backend.state.password_required === true; password: true; placeholderText: "Current password to remove protection"; Layout.fillWidth: true }
@@ -780,7 +838,7 @@ ShellRoot {
                         text: "Remove password"
                         Layout.fillWidth: true
                         enabled: backend.unlocked && !backend.busy && currentPassword.text.length > 0
-                        onClicked: { backend.request("remove_password", {password: currentPassword.text}); currentPassword.clear() }
+                        onClicked: backend.request("remove_password", {password: currentPassword.text})
                     }
                     Divider {}
 
@@ -795,7 +853,8 @@ ShellRoot {
                     Label { visible: backend.recoveryPhrase !== ""; text: (backend.state.mints || []).map(mint => mint.url).join("\n"); Layout.fillWidth: true }
                     Label { visible: backend.recoveryPhrase !== ""; text: "Write these words down privately, together with your mint URLs. This view hides after one minute. A phrase does not restore your full history."; opacity: 0.65; Layout.fillWidth: true }
                     Button { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; focusable: true; onClicked: backend.recoveryPhrase = "" }
-                    Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup password (12+ characters)"; Layout.fillWidth: true }
+                    Label { text: "A backup travels, so it is the file most likely to be copied. Several random words make a far stronger passphrase than a short complicated one."; opacity: 0.65; Layout.fillWidth: true }
+                    Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup passphrase (12+ characters)"; Layout.fillWidth: true }
                     Ui.TextField { id: backupConfirmation; password: true; placeholderText: "Repeat backup password"; Layout.fillWidth: true }
                     Action {
                         text: "Export encrypted backup"

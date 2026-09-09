@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::access::Access;
+use crate::diagnostics::{logged, note};
 use bip39::Mnemonic;
 use cdk::cdk_database::WalletDatabase;
 use cdk::nuts::CurrencyUnit;
@@ -256,11 +257,16 @@ impl Session {
             return self.select_mint(&url);
         }
         let wallet = self.make_wallet(&url)?;
-        let info = tokio::time::timeout(Duration::from_secs(15), wallet.fetch_mint_info())
-            .await
-            .map_err(|_| "Mint did not respond in time.")?
-            .map_err(|_| "Cannot fetch this mint's information.")?
-            .ok_or("Mint did not return its information.")?;
+        let info =
+            match tokio::time::timeout(Duration::from_secs(15), wallet.fetch_mint_info()).await {
+                Err(_) => return Err("Mint did not respond in time."),
+                Ok(Err(error)) => {
+                    note(&format!("{url} fetch_mint_info"), &error);
+                    return Err("Cannot fetch this mint's information.");
+                }
+                Ok(Ok(None)) => return Err("Mint did not return its information."),
+                Ok(Ok(Some(info))) => info,
+            };
         let info = serde_json::to_value(info).map_err(|_| "Cannot read mint information.")?;
         for nut in ["4", "5"] {
             let settings = &info["nuts"][nut];
@@ -280,13 +286,24 @@ impl Session {
                 "This mint does not advertise the restoration support required by Chaumarchy.",
             );
         }
-        let name = info["name"]
+        // The name is mint-controlled and is rendered by shared Omarchy
+        // components whose text format is not ours to pin, so keep it printable
+        // and free of the delimiters that turn a label into rich text.
+        let name: String = info["name"]
             .as_str()
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&url);
+            .unwrap_or_default()
+            .chars()
+            .filter(|character| !character.is_control() && !matches!(character, '<' | '>'))
+            .take(100)
+            .collect();
+        let name = if name.trim().is_empty() {
+            url.clone()
+        } else {
+            name
+        };
         self.settings.mints.push(Mint {
             url: url.clone(),
-            name: name.chars().take(100).collect(),
+            name,
         });
         let previous = self.settings.selected.replace(url.clone());
         if let Err(error) = self.save_settings() {
@@ -312,29 +329,63 @@ impl Session {
 
     pub async fn reconcile(&mut self) {
         let mut restored_all = true;
+        let needs_restore = self.settings.needs_restore;
         for (url, wallet) in &self.wallets {
             let outcome = tokio::time::timeout(
-                Duration::from_secs(if self.settings.needs_restore { 180 } else { 20 }),
+                Duration::from_secs(if needs_restore { 180 } else { 20 }),
                 async {
-                    if self.settings.needs_restore {
-                        wallet.restore().await?;
+                    // Every step runs even when an earlier one fails. A single
+                    // unrecoverable operation must never block unissued quotes,
+                    // pending melts, or spent-proof checks at this mint.
+                    let mut synced = true;
+                    if needs_restore {
+                        synced &= logged(&format!("{url} restore"), wallet.restore().await);
                     }
-                    let report = wallet.recover_incomplete_sagas().await?;
-                    if report.failed > 0 {
-                        return Err(cdk::Error::Custom("Recovery incomplete".into()));
+                    match wallet.recover_incomplete_sagas().await {
+                        Ok(report) => {
+                            if report.failed > 0 {
+                                note(
+                                    &format!("{url} recover_incomplete_sagas"),
+                                    &format!("{} operation(s) still unrecovered", report.failed),
+                                );
+                                synced = false;
+                            }
+                        }
+                        Err(error) => {
+                            note(&format!("{url} recover_incomplete_sagas"), &error);
+                            synced = false;
+                        }
                     }
-                    wallet.mint_unissued_quotes().await?;
-                    wallet.finalize_pending_melts().await?;
-                    wallet.check_all_pending_proofs().await?;
-                    let proofs = wallet.get_unspent_proofs().await?;
-                    if !proofs.is_empty() {
-                        wallet.check_proofs_spent(proofs).await?;
+                    synced &= logged(
+                        &format!("{url} mint_unissued_quotes"),
+                        wallet.mint_unissued_quotes().await,
+                    );
+                    synced &= logged(
+                        &format!("{url} finalize_pending_melts"),
+                        wallet.finalize_pending_melts().await,
+                    );
+                    synced &= logged(
+                        &format!("{url} check_all_pending_proofs"),
+                        wallet.check_all_pending_proofs().await,
+                    );
+                    match wallet.get_unspent_proofs().await {
+                        Ok(proofs) if !proofs.is_empty() => {
+                            synced &= logged(
+                                &format!("{url} check_proofs_spent"),
+                                wallet.check_proofs_spent(proofs).await,
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            note(&format!("{url} get_unspent_proofs"), &error);
+                            synced = false;
+                        }
                     }
-                    Ok::<_, cdk::Error>(())
+                    synced
                 },
             )
             .await;
-            let synced = matches!(outcome, Ok(Ok(())));
+            let synced = outcome.unwrap_or(false);
             restored_all &= synced;
             self.sync_status
                 .insert(url.clone(), if synced { "synced" } else { "retrying" });
@@ -370,35 +421,54 @@ impl Session {
                 "pending": pending.to_string(), "reserved": reserved.to_string(),
                 "sync": self.sync_status.get(&mint.url).unwrap_or(&"waiting")}));
         }
-        let mut history = Vec::new();
-        let mut pending_sends = Vec::new();
-        let mut pending_invoices = Vec::new();
-        let mut issued_invoices = Vec::new();
-        if let Ok(wallet) = self.selected_wallet() {
-            for quote in self
-                .db
-                .get_mint_quotes()
-                .await
-                .map_err(|_| "Cannot read saved invoices.")?
-            {
-                if quote.mint_url == wallet.mint_url
-                    && quote.payment_method == PaymentMethod::BOLT11
-                {
-                    if quote.state == cdk::nuts::MintQuoteState::Issued {
-                        issued_invoices.push(json!({"id":quote.id,"mint":quote.mint_url.to_string(),"amount":quote.amount_issued.to_string()}));
-                    } else {
-                        pending_invoices.push(json!({"id":quote.id,"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}));
-                    }
-                }
-            }
+        // Recent activity spans every mint so the total balance and its history agree.
+        let mut recent = Vec::new();
+        for mint in &self.settings.mints {
+            let wallet = self
+                .wallets
+                .get(&mint.url)
+                .ok_or("Mint state is inconsistent.")?;
             let transactions = wallet
                 .list_transactions(None)
                 .await
                 .map_err(|_| "Cannot read payment history.")?;
-            for tx in transactions.iter().take(100) {
-                history.push(json!({"id":tx.id().to_string(),"amount":tx.amount.to_string(),"fee":tx.fee.to_string(),
+            for tx in transactions.into_iter().take(100) {
+                recent.push((tx.timestamp, json!({"id":tx.id().to_string(),"amount":tx.amount.to_string(),"fee":tx.fee.to_string(),
                     "direction":tx.direction.to_string(),"status":tx.status.to_string(),"timestamp":tx.timestamp,
-                    "kind":if tx.payment_method.is_some() {"Lightning"} else {"Ecash"}}));
+                    "kind":if tx.payment_method.is_some() {"Lightning"} else {"Ecash"},
+                    "mint":mint.url.clone(),"mint_name":mint.name.clone()})));
+            }
+        }
+        recent.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let history: Vec<Value> = recent.into_iter().take(100).map(|(_, tx)| tx).collect();
+        // Pending money spans every mint, like the balance and history above.
+        // Unclaimed ecash at an unselected mint must stay visible and
+        // actionable, including while a restore is still reconciling.
+        let mut pending_sends = Vec::new();
+        let mut pending_invoices = Vec::new();
+        let mut issued_invoices = Vec::new();
+        let quotes = self
+            .db
+            .get_mint_quotes()
+            .await
+            .map_err(|_| "Cannot read saved invoices.")?;
+        for mint in &self.settings.mints {
+            let wallet = self
+                .wallets
+                .get(&mint.url)
+                .ok_or("Mint state is inconsistent.")?;
+            for quote in &quotes {
+                if quote.mint_url != wallet.mint_url
+                    || quote.payment_method != PaymentMethod::BOLT11
+                {
+                    continue;
+                }
+                if quote.state == cdk::nuts::MintQuoteState::Issued {
+                    issued_invoices.push(json!({"id":quote.id,"mint":quote.mint_url.to_string(),"amount":quote.amount_issued.to_string()}));
+                } else {
+                    pending_invoices.push(json!({"id":quote.id,"amount":quote.amount.unwrap_or_default().to_string(),
+                        "expiry":quote.expiry,"mint":mint.url.clone(),"mint_name":mint.name.clone()}));
+                }
             }
             for id in wallet
                 .get_pending_sends()
@@ -416,7 +486,8 @@ impl Session {
                         }
                         _ => None,
                     });
-                pending_sends.push(json!({"id":id.to_string(),"amount":amount}));
+                pending_sends.push(json!({"id":id.to_string(),"amount":amount,
+                    "mint":mint.url.clone(),"mint_name":mint.name.clone()}));
             }
         }
         Ok(
@@ -458,16 +529,29 @@ impl Session {
         )
     }
 
+    /// Resolve the mint that owns a saved send, so pending ecash stays
+    /// actionable no matter which mint is currently selected.
+    pub async fn wallet_for_operation(&self, input: &str) -> Result<&Wallet> {
+        let id = input.parse().map_err(|_| "Invalid transfer reference.")?;
+        let saga = self
+            .db
+            .get_saga(&id)
+            .await
+            .map_err(|_| "Cannot read saved transfer.")?
+            .ok_or("Transfer not found.")?;
+        self.wallet_for(&saga.mint_url.to_string())
+    }
+
     pub async fn pending_token(&self, input: &str) -> Result<Value> {
         let id = input.parse().map_err(|_| "Invalid transfer reference.")?;
-        let wallet = self.selected_wallet()?;
+        let wallet = self.wallet_for_operation(input).await?;
         if !wallet
             .get_pending_sends()
             .await
             .map_err(|_| "Cannot read pending sends.")?
             .contains(&id)
         {
-            return Err("This transfer is no longer pending at the selected mint.");
+            return Err("This transfer is no longer pending at its mint.");
         }
         let saga = self
             .db
@@ -489,16 +573,16 @@ impl Session {
     }
 
     pub async fn saved_invoice(&self, id: &str) -> Result<Value> {
-        let wallet = self.selected_wallet()?;
         let quote = self
             .db
             .get_mint_quote(id)
             .await
             .map_err(|_| "Cannot read saved invoice.")?
             .ok_or("Invoice not found.")?;
-        if quote.mint_url != wallet.mint_url || quote.payment_method != PaymentMethod::BOLT11 {
-            return Err("This invoice does not belong to the selected mint.");
+        if quote.payment_method != PaymentMethod::BOLT11 {
+            return Err("This is not a Lightning invoice.");
         }
+        let wallet = self.wallet_for(&quote.mint_url.to_string())?;
         Ok(
             json!({"invoice":quote.request,"quote_id":quote.id,"mint":wallet.mint_url.to_string(),"amount":quote.amount.unwrap_or_default().to_string(),"expiry":quote.expiry}),
         )
@@ -552,7 +636,10 @@ impl Session {
 }
 
 pub fn parse_amount(input: &str) -> Result<Amount> {
-    let amount: u64 = input.parse().map_err(|_| "Enter a whole number of sats.")?;
+    let amount: u64 = input
+        .trim()
+        .parse()
+        .map_err(|_| "Enter a whole number of sats.")?;
     if amount == 0 || amount > 2_100_000_000_000_000 {
         return Err("Enter a valid positive amount in sats.");
     }
@@ -835,5 +922,28 @@ mod tests {
         .await
         .is_err());
         assert!(!storage.exists());
+    }
+
+    #[tokio::test]
+    async fn device_key_from_an_interrupted_setup_does_not_block_a_protected_wallet() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp.path()).unwrap();
+        // Leave a device key behind, as a creation interrupted between writing
+        // the key and creating the wallet file would.
+        Access::new(&storage.path).creation_key("").unwrap();
+        assert!(temp.path().join("device.key").exists());
+        assert!(!storage.exists());
+        let session = Session::create(&storage, "protected password 123")
+            .await
+            .unwrap();
+        let phrase = session.mnemonic.to_string();
+        assert!(session.password_required);
+        assert!(!temp.path().join("device.key").exists());
+        drop(session);
+        assert!(Session::open(&storage, "incorrect password").await.is_err());
+        let session = Session::open(&storage, "protected password 123")
+            .await
+            .unwrap();
+        assert_eq!(session.mnemonic.to_string(), phrase);
     }
 }

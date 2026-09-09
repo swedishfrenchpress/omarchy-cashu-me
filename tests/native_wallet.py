@@ -90,8 +90,15 @@ ShellRoot {
                     def ipc(path, target, method, *args):
                         return subprocess.run(["quickshell", "ipc", "-p", str(path), "call", "--", target, method, *args],
                             env=environment, text=True, capture_output=True, timeout=5)
-                    def call(method):
-                        self.assertEqual(ipc(ui, "test", method).returncode, 0)
+                    def call(method, *args):
+                        result = ipc(ui, "test", method, *args)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        # quickshell reports IPC-level failures (unknown target
+                        # or function, bad arguments) on stdout with exit 0, so
+                        # the status alone does not prove the call dispatched.
+                        self.assertNotRegex(result.stdout, r"(?i)no such|not found|invalid|unknown",
+                            f"IPC call {method} was not dispatched: {result.stdout!r}")
+                        return result
                     def wait(predicate, seconds=15):
                         deadline = time.monotonic() + seconds
                         while time.monotonic() < deadline:
@@ -124,11 +131,16 @@ ShellRoot {
                     wait(lambda s: s["balance"] == "64", seconds=40)
                     self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
                     wait(lambda s: s["page"] == "complete" and s["completionAmount"] == "64")
-                    self.assertEqual(ipc(ui, "test", "navigate", "history").returncode, 0)
+                    call("navigate", "history")
                     wait(lambda s: s["page"] == "history" and s["activityCount"] == 1)
-                    self.assertEqual(ipc(ui, "test", "filter", "sent").returncode, 0)
+                    # Assert both directions: a filter that always returned an
+                    # empty list passed when only the "sent" case was checked.
+                    call("filter", "sent")
                     wait(lambda s: s["activityCount"] == 0)
-                    self.assertEqual(ipc(ui, "test", "filter", "all").returncode, 0)
+                    call("filter", "received")
+                    wait(lambda s: s["activityCount"] == 1)
+                    call("filter", "all")
+                    wait(lambda s: s["activityCount"] == 1)
                     call("detail"); wait(lambda s: s["page"] == "transaction")
                     call("back"); wait(lambda s: s["page"] == "history")
                     if environment.get("CHAUMARCHY_TEST_CAPTURE"):

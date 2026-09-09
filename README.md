@@ -14,7 +14,7 @@ cargo build --release --locked
 chaumarchy
 ```
 
-The installer registers this checkout in your application launcher, creates `~/.local/bin/chaumarchy`, and adds a wallet icon to the right-hand Omarchy bar. It backs up `shell.json` before adding the icon and preserves your existing layout. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
+The installer registers this checkout in your application launcher, creates `~/.local/bin/chaumarchy`, and adds a wallet icon to the right-hand Omarchy bar. It backs up `shell.json` before adding the icon and preserves your existing layout. If `shell.json` is a symlink, as a dotfiles setup usually makes it, the bar step is skipped rather than replacing the link with a regular file, and the command to add the icon yourself is printed instead. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
 
 For development, `cargo build --locked` works when no release binary exists. `./bin/chaumarchy --preview` opens a separate UI preview with wallet actions disabled.
 
@@ -35,11 +35,11 @@ Settings → **Reduce motion** switches to gentle fades without movement. Motion
 2. In Mints, explicitly add a suggested mint or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
 3. Receive by creating a BOLT11 Lightning invoice or redeeming a Cashu token. Paste tokens, scan a screen region, import a QR image, or use a webcam.
 4. Send by pasting a BOLT11 invoice or choosing Send ecash and entering an amount. Review the mint, amount, and maximum fee/debit before confirmation.
-5. Wallet shows the selected mint and recent payments. History provides filters, payment details, pending invoices, and unclaimed ecash. Mints lists each balance separately. Reopen a token to share it again, or reclaim it if it remains unspent.
+5. Wallet shows your total balance across mints and recent payments. History provides filters, payment details, pending invoices, and unclaimed ecash. Mints lists each balance separately and marks the mint used for new payments. Dates follow the Omarchy clock format from `~/.config/omarchy/shell.json`, without the year. Reopen a token to share it again, or reclaim it if it remains unspent.
 
 Balances stay separate by mint. A token from an unfamiliar mint requires explicitly adding that mint first. This version uses sats and static QR codes. Large tokens can be copied as text. Lightning addresses, BOLT12, on-chain transfers, animated QR, and automatic transfers between mints are outside this milestone.
 
-Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and Escape or Alt+Left to go back. Payment confirmation remains explicit.
+Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and the back arrow, Escape, or Alt+Left to go back. Scan and Settings are icons beside the expand control at the top right. Payment confirmation remains explicit.
 
 ## Optional password
 

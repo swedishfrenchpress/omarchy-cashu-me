@@ -75,11 +75,20 @@ impl Access {
     }
     pub fn creation_key(&self, password: &str) -> Result<Zeroizing<String>> {
         if !password.is_empty() {
-            if self.device().exists() || self.vault().exists() {
+            if self.vault().exists() {
                 return Err("Wallet access settings already exist. Reopen the wallet before changing its password.");
             }
             if password.chars().count() < 12 {
                 return Err("Use a password of at least 12 characters.");
+            }
+            // Creation runs only when no wallet file exists, so a device key
+            // here is left over from an interrupted attempt. It protects
+            // nothing, and refusing on its account permanently blocked creating
+            // a password-protected wallet.
+            if self.device().exists() {
+                fs::remove_file(self.device())
+                    .map_err(|_| "Cannot clear the device key left by an interrupted setup.")?;
+                self.flush()?;
             }
             return Ok(Zeroizing::new(password.to_owned()));
         }

@@ -10,6 +10,9 @@ QtObject {
     property bool ready: false
     property bool busy: false
     property int nextId: 1
+    property int pendingId: 0
+    property string pendingMethod: ""
+    property int restartAttempts: 0
     property string error: ""
     property bool restarting: false
     property string recoveryPhrase: ""
@@ -22,6 +25,9 @@ QtObject {
     signal mintAdded()
     signal showResult()
     signal locked()
+    // Emitted only once the worker has accepted a request, so callers can clear
+    // the secret they submitted without discarding it on a recoverable failure.
+    signal succeeded(string method)
 
     function request(method, fields) {
         if (!ready || busy || preview) return
@@ -30,12 +36,16 @@ QtObject {
         error = ""
         notice = ""
         busy = true
+        pendingId = message.id
+        pendingMethod = method
         worker.write(JSON.stringify(message) + "\n")
     }
     function lock() {
         if (preview) return
         state = {unlocked: false, exists: state.exists, password_required: state.password_required, mints: [], selected: null}
         busy = false
+        pendingId = 0
+        pendingMethod = ""
         ready = false
         error = ""
         recoveryPhrase = ""
@@ -46,15 +56,26 @@ QtObject {
         completion = {}
         locked()
         restarting = true
-        worker.running = false
+        // Clear the interface at once, but ask the worker to stop rather than
+        // signalling it: a kill during confirm would abandon a payment in
+        // flight. The worker finishes its current mint call, releases any
+        // reservation it holds, and exits.
+        if (worker.running) {
+            worker.write(JSON.stringify({id: nextId++, method: "lock"}) + "\n")
+            lockTimer.restart()
+        } else {
+            restarting = false
+        }
     }
     function consume(raw) {
         if (restarting) return
         try {
             var message = JSON.parse(raw)
+            var finished = ""
             if (message.event === "state") {
                 state = message.state
                 ready = true
+                restartAttempts = 0
                 if (share.invoice && share.mint) {
                     var issued = (state.issued_invoices || []).find(quote => quote.id === share.quote_id && quote.mint === share.mint)
                     if (issued) {
@@ -64,7 +85,15 @@ QtObject {
                     }
                 }
             }
-            if (message.id !== undefined) busy = false
+            // Resolve only the outstanding request. The worker also emits
+            // {"id":null} for input it could not parse, which is a reply to
+            // nothing and must never release a live request.
+            if (message.id !== undefined && message.id !== null && message.id === pendingId) {
+                busy = false
+                finished = message.error ? "" : pendingMethod
+                pendingId = 0
+                pendingMethod = ""
+            }
             if (message.review_done) { review = null; reviewId = "" }
             if (message.error) error = message.error
             if (message.result && message.result.review) {
@@ -91,6 +120,7 @@ QtObject {
             if (message.result && message.result.mint_added) { notice = "Mint added."; mintAdded() }
             if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
             if (message.event === "fatal") ready = false
+            if (finished !== "") succeeded(finished)
         } catch (_) {
             lock()
             error = "Invalid response from the wallet worker."
@@ -104,6 +134,7 @@ QtObject {
         // Never forward worker output to QML console logs.
         stderr: SplitParser { onRead: data => {} }
         onExited: {
+            root.lockTimer.stop()
             root.state = {unlocked: false, exists: root.state.exists, password_required: root.state.password_required, mints: [], selected: null}
             root.ready = false
             root.recoveryPhrase = ""
@@ -112,14 +143,30 @@ QtObject {
             root.share = {}
             root.completion = {}
             root.busy = false
+            root.pendingId = 0
+            root.pendingMethod = ""
             root.locked()
             if (root.restarting) restartTimer.start()
-            else if (!root.error) root.error = "Wallet worker stopped. Reopen Chaumarchy to retry."
+            else if (root.restartAttempts < 3) {
+                // An unexpected stop used to leave the interface permanently
+                // inert. Come back locked instead; the user reopens the wallet.
+                root.restartAttempts++
+                root.restarting = true
+                root.error = "The wallet worker stopped unexpectedly and was restarted. Open your wallet again."
+                restartTimer.start()
+            }
+            else if (!root.error) root.error = "Wallet worker stopped repeatedly. Reopen Chaumarchy to retry."
         }
     }
     property Timer restartTimer: Timer {
         interval: 50
         onTriggered: { root.restarting = false; root.worker.running = true }
+    }
+    property Timer lockTimer: Timer {
+        // Longer than the worker's own 90 s confirm bound, so a payment already
+        // in flight records its outcome before the worker is forced down.
+        interval: 120000
+        onTriggered: if (root.worker.running) root.worker.running = false
     }
     property Timer phraseTimer: Timer {
         interval: 60000
