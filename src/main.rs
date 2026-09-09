@@ -1,6 +1,7 @@
 mod access;
 mod diagnostics;
 mod payments;
+mod rates;
 mod wallet;
 
 use serde::Deserialize;
@@ -36,6 +37,10 @@ struct Request {
     phrase: String,
     #[serde(default)]
     mint_urls: Vec<String>,
+    #[serde(default)]
+    bitcoin_symbol: bool,
+    #[serde(default)]
+    fiat_currency: String,
 }
 
 impl Drop for Request {
@@ -236,6 +241,14 @@ async fn main() {
                     },
                     "select_mint" => match session.as_mut() {
                         Some(session) => session.select_mint(&request.url).map(|_| json!({})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "set_display" => match session.as_mut() {
+                        Some(session) => {
+                            let currency = request.fiat_currency.trim();
+                            let currency = if currency.is_empty() { None } else { Some(currency.to_owned()) };
+                            session.set_display(request.bitcoin_symbol, currency).await.map(|_| json!({"display_updated":true}))
+                        },
                         None => Err("Unlock the wallet first.")
                     },
                     "status" => Ok(json!({})),

@@ -526,6 +526,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bip39",
+ "bitreq",
  "cdk",
  "cdk-sqlite",
  "fs2",

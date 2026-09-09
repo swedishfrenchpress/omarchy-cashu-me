@@ -117,6 +117,7 @@ QtObject {
                 phraseTimer.restart()
             }
             if (message.result && message.result.security_updated) notice = "Security settings updated."
+            if (message.result && message.result.display_updated) notice = "Display settings updated."
             if (message.result && message.result.mint_added) { notice = "Mint added."; mintAdded() }
             if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
             if (message.event === "fatal") ready = false
