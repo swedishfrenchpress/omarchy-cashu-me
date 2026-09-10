@@ -158,6 +158,10 @@ class WalletIntegration(unittest.TestCase):
                 self.assertIn("error", alice.call("unlock", password="incorrect password"))
                 alice.ok("unlock", password=PASSWORD)
                 alice.ok("sync")
+                # The pending send's history row carries its operation id, so the
+                # detail page can show the token and reclaim it.
+                linked = [row for row in alice.state()["history"] if row.get("operation_id") == pending["operation_id"]]
+                self.assertEqual(len(linked), 1)
                 reopened = alice.ok("show_pending_token", operation_id=pending["operation_id"])
                 self.assertTrue(reopened["token"].startswith("cashu"))
                 self.assertEqual(reopened["amount"], "8")

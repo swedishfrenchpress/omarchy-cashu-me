@@ -1218,27 +1218,34 @@ ShellRoot {
                     DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
                     DetailRow { heading: "Mint"; value: app.transaction.mint_name || app.transaction.mint || "" }
                     DetailRow { visible: Number(app.transaction.fee || 0) > 0; heading: "Fee"; value: app.primaryAmount(app.transaction.fee) }
+                    // Unclaimed ecash: the token can be shown and copied again,
+                    // or taken back while nobody has redeemed it.
+                    Action { visible: !!app.transaction.operation_id && !parent.settled; text: "Show token"; enabled: !backend.busy; onClicked: backend.request("show_pending_token", {operation_id: app.transaction.operation_id}) }
+                    Secondary { visible: !!app.transaction.operation_id && !parent.settled; text: "Reclaim ecash"; enabled: !backend.busy; onClicked: backend.request("reclaim_token", {operation_id: app.transaction.operation_id}) }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "send"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Send"; font.pixelSize: Style.font.heading; font.bold: true }
-                    PasteField { placeholderText: "Address, invoice, or Cashu Request"; target: "invoice"; text: app.paymentText; onEdited: text => app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
-                    Action { id: invoiceReview; visible: app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
-                    Entry { icon: "󰐲"; heading: "Scan"; detail: "Scan an invoice, address, or request"; onClicked: app.go("scan") }
-                    Entry { id: ecashChoice; icon: "󰄔"; heading: "Ecash"; detail: "Create a token to share with someone"; onClicked: { app.entryText = ""; app.lockTo = ""; app.lockToOpen = false; app.go("send_amount") } }
-                    Entry { visible: !backend.state.selected; icon: "󰭎"; heading: "Choose a mint first"; onClicked: app.go("mints") }
+                    // Without a mint there is nothing to send from; the reference
+                    // shows this in place of the sheet's contents.
+                    EmptyState { visible: app.mints.length === 0; section: true; icon: "󰁰"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
+                    PasteField { visible: app.mints.length > 0; placeholderText: "Address, invoice, or Cashu Request"; target: "invoice"; text: app.paymentText; onEdited: text => app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
+                    Action { id: invoiceReview; visible: app.mints.length > 0 && app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
+                    Entry { visible: app.mints.length > 0; icon: "󰐲"; heading: "Scan"; detail: "Scan an invoice, address, or request"; onClicked: app.go("scan") }
+                    Entry { id: ecashChoice; visible: app.mints.length > 0; icon: "󰄔"; heading: "Ecash"; detail: "Create a token to share with someone"; onClicked: { app.entryText = ""; app.lockTo = ""; app.lockToOpen = false; app.go("send_amount") } }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "receive"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Receive"; font.pixelSize: Style.font.heading; font.bold: true }
-                    PasteField { placeholderText: "Paste a Cashu token"; target: "token"; text: app.receiveText; onEdited: text => app.receiveText = text; onAccepted: if (receiveReview.enabled) receiveReview.clicked() }
-                    Action { id: receiveReview; visible: app.receiveText.trim() !== ""; text: backend.busy ? "Preparing…" : "Receive"; enabled: backend.unlocked && !backend.busy; onClicked: backend.request("receive_token", {text: app.receiveText}) }
-                    Entry { icon: "󰐲"; heading: "Scan"; detail: "Scan an ecash token"; onClicked: app.go("scan") }
-                    Entry { id: lightningChoice; icon: "󱐋"; heading: "Lightning"; detail: "Create an invoice to receive from another wallet"; onClicked: { app.entryText = ""; app.go("receive_amount") } }
+                    EmptyState { visible: app.mints.length === 0; section: true; icon: "󰁰"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
+                    PasteField { visible: app.mints.length > 0; placeholderText: "Paste a Cashu token"; target: "token"; text: app.receiveText; onEdited: text => app.receiveText = text; onAccepted: if (receiveReview.enabled) receiveReview.clicked() }
+                    Action { id: receiveReview; visible: app.mints.length > 0 && app.receiveText.trim() !== ""; text: backend.busy ? "Preparing…" : "Receive"; enabled: backend.unlocked && !backend.busy; onClicked: backend.request("receive_token", {text: app.receiveText}) }
+                    Entry { visible: app.mints.length > 0; icon: "󰐲"; heading: "Scan"; detail: "Scan an ecash token"; onClicked: app.go("scan") }
+                    Entry { id: lightningChoice; visible: app.mints.length > 0; icon: "󱐋"; heading: "Lightning"; detail: "Create an invoice to receive from another wallet"; onClicked: { app.entryText = ""; app.go("receive_amount") } }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && (app.page === "send_amount" || app.page === "receive_amount")

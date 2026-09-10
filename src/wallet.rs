@@ -773,6 +773,22 @@ impl Session {
                 "pending": pending.to_string(), "reserved": reserved.to_string(),
                 "sync": self.sync_status.get(&mint.url).unwrap_or(&"waiting")}));
         }
+        // A pending send is known to its transaction by the proofs it holds,
+        // so the payment detail can offer the token and a reclaim.
+        let mut pending_by_proof: BTreeMap<String, String> = BTreeMap::new();
+        for wallet in self.wallets.values() {
+            for id in wallet.get_pending_sends().await.unwrap_or_default() {
+                if let Ok(Some(saga)) = self.db.get_saga(&id).await {
+                    if let cdk::wallet::types::OperationData::Send(data) = saga.data {
+                        for proof in data.proofs.unwrap_or_default() {
+                            if let Ok(y) = proof.y() {
+                                pending_by_proof.insert(y.to_hex(), id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Recent activity spans every mint so the total balance and its history agree.
         let mut recent = Vec::new();
         for mint in &self.settings.mints {
@@ -785,10 +801,22 @@ impl Session {
                 .await
                 .map_err(|_| "Cannot read payment history.")?;
             for tx in transactions.into_iter().take(100) {
+                // Only the outgoing ecash row is the send; the swap that made
+                // its proofs shares them and must not claim the operation.
+                let outgoing_ecash = tx.direction
+                    == cdk::wallet::types::TransactionDirection::Outgoing
+                    && tx.payment_method.is_none();
+                let operation_id = if outgoing_ecash {
+                    tx.ys
+                        .iter()
+                        .find_map(|y| pending_by_proof.get(&y.to_hex()).cloned())
+                } else {
+                    None
+                };
                 recent.push((tx.timestamp, json!({"id":tx.id().to_string(),"amount":tx.amount.to_string(),"fee":tx.fee.to_string(),
                     "direction":tx.direction.to_string(),"status":tx.status.to_string(),"timestamp":tx.timestamp,
                     "kind":if tx.payment_method.is_some() {"Lightning"} else {"Ecash"},
-                    "mint":mint.url.clone(),"mint_name":mint.name.clone()})));
+                    "mint":mint.url.clone(),"mint_name":mint.name.clone(),"operation_id":operation_id})));
             }
         }
         recent.sort_by_key(|a| std::cmp::Reverse(a.0));
