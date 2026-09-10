@@ -986,7 +986,14 @@ pub fn parse_amount(input: &str) -> Result<Amount> {
 }
 
 pub fn validate_mint_url(input: &str) -> Result<String> {
-    let mut parsed = url::Url::parse(input.trim()).map_err(|_| "Enter a valid HTTPS mint URL.")?;
+    // A bare host is what people type; HTTPS is the only scheme it can mean.
+    let input = input.trim();
+    let input = if input.contains("://") {
+        input.to_owned()
+    } else {
+        format!("https://{input}")
+    };
+    let mut parsed = url::Url::parse(&input).map_err(|_| "Enter a valid mint URL.")?;
     let loopback = parsed.host_str().is_some_and(|host| {
         host == "localhost"
             || host
@@ -1054,6 +1061,10 @@ mod tests {
     fn mint_urls_preserve_paths_and_reject_credentials() {
         assert_eq!(
             validate_mint_url(" https://mint.minibits.cash/Bitcoin/ ").unwrap(),
+            "https://mint.minibits.cash/Bitcoin"
+        );
+        assert_eq!(
+            validate_mint_url("mint.minibits.cash/Bitcoin").unwrap(),
             "https://mint.minibits.cash/Bitcoin"
         );
         for bad in [

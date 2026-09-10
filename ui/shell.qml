@@ -243,7 +243,7 @@ ShellRoot {
     }
     // A page that pins its action to the bottom of the panel: fills the
     // panel, but never stretches a tall window into a void.
-    function pinnedHeight(implicit) { return Math.max(implicit, Math.min(contentScroll.availableHeight, Style.space(620)) - header.height - Style.space(app.compact ? 16 : 22)) }
+    function pinnedHeight(implicit) { return Math.max(implicit, Math.min(contentScroll.availableHeight, Style.space(560)) - header.height - Style.space(app.compact ? 16 : 22)) }
     // ---- Restore flow
     property string restoreStep: "seed"
     property string restoreWordsText: ""
@@ -462,6 +462,7 @@ ShellRoot {
             if (code !== 0) return
             if (app.pasteTarget === "token") { if (text.startsWith("cashu")) app.receiveText = text; else if (text !== "" && pasteProbe.explicit) app.toast("That doesn't look like a Cashu token") }
             else if (app.pasteTarget === "invoice") { if (text !== "") app.paymentText = text.replace(/^lightning:/i, "") }
+            else if (app.pasteTarget === "mint") { if (text !== "") app.mintUrl = text.split(/\s+/)[0] }
             else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
             else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
             app.pasteTarget = ""
@@ -1141,15 +1142,26 @@ ShellRoot {
                     visible: app.walletVisible && !backend.review && app.page === "transaction"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
-                    Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading }
+                    readonly property string outcome: String(app.transaction.status || "").toLowerCase()
+                    readonly property bool settled: outcome === "completed" || outcome === "paid"
+                    readonly property bool failed: outcome === "failed"
+                    Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    // The reference's result mark: a filled tile with a check for
+                    // a settled payment, a clock while pending, a cross when failed.
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.topMargin: Style.space(8)
+                        width: Style.space(72)
+                        height: width
+                        radius: Style.cornerRadius
+                        color: parent.settled ? app.received : parent.failed ? app.destructive : Qt.alpha(Color.foreground, 0.12)
+                        Label { anchors.centerIn: parent; text: parent.parent.settled ? "󰄬" : parent.parent.failed ? "󰅖" : "󰔟"; color: parent.parent.settled || parent.parent.failed ? Color.background : Color.foreground; font.pixelSize: Style.space(36); font.bold: true }
+                    }
                     AmountDisplay { amount: app.transaction.amount; emphasized: true; animated: false }
-                    DetailRow { heading: "Status"; value: app.transaction.status || "" }
-                    DetailRow { heading: "Fee"; value: app.amountLabel(app.transaction.fee) }
+                    DetailRow { heading: "Status"; value: parent.settled ? (app.transaction.kind === "Lightning" ? "Paid" : "Completed") : parent.failed ? "Failed" : "Pending" }
                     DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
                     DetailRow { heading: "Mint"; value: app.transaction.mint_name || app.transaction.mint || "" }
-                    Divider {}
-                    Label { text: "Transfer reference"; opacity: 0.6 }
-                    Label { text: app.transaction.id || ""; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    DetailRow { visible: Number(app.transaction.fee || 0) > 0; heading: "Fee"; value: app.primaryAmount(app.transaction.fee) }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "send"
@@ -1181,7 +1193,7 @@ ShellRoot {
                     // Layout.preferredHeight fills the panel so the button
                     // sits at the bottom and the amount floats between.
                     id: amountPage
-                    Layout.preferredHeight: Math.max(implicitHeight, contentScroll.availableHeight - header.height - parent.spacing)
+                    Layout.preferredHeight: app.pinnedHeight(implicitHeight)
                     onVisibleChanged: if (visible) amountInput.forceActiveFocus()
                     Label { text: app.page === "send_amount" ? "Send ecash" : "Receive Lightning"; font.pixelSize: Style.font.heading; font.bold: true }
                     Action {
@@ -1342,16 +1354,17 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(16)
                     Label { text: "Add a mint"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { text: "SUGGESTED"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                    Caption { text: "SUGGESTED" }
+                    // Tapping a suggestion adds it outright; the field below is for
+                    // any other mint, with or without its https://.
                     Repeater {
                         model: app.suggestions
-                        delegate: Entry { required property var modelData; heading: modelData.name; detail: modelData.url; showsActiveMark: true; selected: app.mintUrl === modelData.url; onClicked: app.mintUrl = modelData.url }
+                        delegate: Entry { required property var modelData; icon: "󰭎"; heading: modelData.name; detail: modelData.url.replace(/^https?:\/\//, ""); trailing: app.mints.some(mint => mint.url === modelData.url) ? "Added" : "›"; enabled: backend.unlocked && !backend.busy && !app.mints.some(mint => mint.url === modelData.url); onClicked: backend.request("add_mint", {url: modelData.url}) }
                     }
-                    Ui.TextField { id: mintInput; Layout.fillWidth: true; placeholderText: "Or enter a mint URL"; text: app.mintUrl; onTextEdited: app.mintUrl = text }
-                    Secondary { text: "Scan mint URL"; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
-                    Label { text: "Adding a mint means trusting its operator to redeem your ecash."; opacity: 0.6; Layout.fillWidth: true }
+                    Caption { text: "OTHER MINT" }
+                    PasteField { placeholderText: "mint.example.com"; target: "mint"; text: app.mintUrl; onEdited: text => app.mintUrl = text; onAccepted: if (addMintButton.enabled) addMintButton.clicked() }
+                    Footer { text: "Adding a mint means trusting its operator to redeem your ecash." }
                     Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
-                    Secondary { text: "View my mints"; onClicked: app.tab("mints") }
                 }
                 // ---- Settings, after cashubtc/wallet's Settings screen, minus
                 // Nostr. Pages, not sheets; confirmations use Omarchy's own
