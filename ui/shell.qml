@@ -447,9 +447,14 @@ ShellRoot {
         property var amount: 0
         property bool emphasized: false
         property int size: Style.space(38)
+        // Rolling digits suit a value that changes in place, like the
+        // balance. A record being opened, like a payment detail, is static.
+        property bool animated: true
         Layout.fillWidth: true
         spacing: Style.space(4)
+        Label { visible: !display.animated; text: app.primaryAmount(display.amount); font.bold: display.emphasized; font.pixelSize: display.size; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
         AnimatedAmount {
+            visible: display.animated
             text: app.primaryAmount(display.amount)
             bold: display.emphasized
             fontSize: display.size
@@ -830,7 +835,7 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading }
-                    AmountDisplay { amount: app.transaction.amount; emphasized: true }
+                    AmountDisplay { amount: app.transaction.amount; emphasized: true; animated: false }
                     DetailRow { heading: "Status"; value: app.transaction.status || "" }
                     DetailRow { heading: "Fee"; value: app.amountLabel(app.transaction.fee) }
                     DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
@@ -989,7 +994,7 @@ ShellRoot {
                         receipt: JSON.stringify(backend.completion)
                     }
                     Label { text: backend.completion.paid ? "Payment sent" : backend.completion.reclaimed ? "Ecash reclaimed" : "Payment received"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    AmountDisplay { amount: backend.completion.amount; emphasized: true; size: Style.space(40) }
+                    AmountDisplay { amount: backend.completion.amount; emphasized: true; size: Style.space(40); animated: false }
                     Action { text: "Back to wallet"; onClicked: app.back() }
                 }
                 ColumnLayout {
