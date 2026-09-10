@@ -143,7 +143,42 @@ ShellRoot {
         if (page !== "scan") scanner.running = false
     }
     property string paymentText: ""
-    property string amountText: ""
+    // The amount being typed, in whichever unit the balance currently shows.
+    // What is sent is always entrySats; a fiat figure is converted at the
+    // current rate and the exact sats show beneath it.
+    property string entryText: ""
+    readonly property bool fiatEntry: app.showingFiat
+    readonly property int fiatDecimals: (app.fiatCurrency === "JPY" || app.fiatCurrency === "KRW") ? 0 : 2
+    readonly property real rate: backend.state.exchange_rate ? Number(backend.state.exchange_rate.rate) : 0
+    readonly property double entrySats: app.fiatEntry ? Math.round(Number(app.entryText || 0) * 100000000 / app.rate) : Number(app.entryText || 0)
+    readonly property bool entryOver: app.page === "send_amount" && app.entrySats > Number(app.selectedMint.spendable || 0)
+    readonly property string entryDisplay: {
+        if (!app.fiatEntry) return app.amountLabel(app.entryText || "0")
+        var info = app.currencyInfo(app.fiatCurrency)
+        var pieces = (app.entryText || "0").split(".")
+        return (info ? info.symbol : "") + app.sats(pieces[0] || "0") + (pieces.length > 1 ? "." + pieces[1] : "")
+    }
+    function normalizeEntry(text) {
+        var clean = text.replace(app.fiatEntry ? /[^0-9.]/g : /[^0-9]/g, "")
+        if (app.fiatEntry) {
+            var dot = clean.indexOf(".")
+            if (dot >= 0) clean = clean.slice(0, dot + 1) + clean.slice(dot + 1).replace(/\./g, "").slice(0, app.fiatDecimals)
+            if (app.fiatDecimals === 0) clean = clean.replace(/\./g, "")
+        }
+        return clean.replace(/^0+(?=\d)/, "").slice(0, 20)
+    }
+    // Swapping the unit keeps the sats constant and rewrites the typed text.
+    function swapEntryUnit() {
+        if (!app.fiatAvailable) return
+        var current = app.entrySats
+        app.cycleBalanceUnit()
+        if (current <= 0) { app.entryText = ""; return }
+        app.entryText = app.fiatEntry ? String(Number((current * app.rate / 100000000).toFixed(app.fiatDecimals))) : String(current)
+    }
+    function cycleMint() {
+        var index = app.mints.findIndex(mint => mint.url === backend.state.selected)
+        if (app.mints.length > 1) backend.request("select_mint", {url: app.mints[(index + 1) % app.mints.length].url})
+    }
     property string mintUrl: ""
     property string receiveMethod: "lightning"
     property var suggestions: []
@@ -205,7 +240,7 @@ ShellRoot {
             app.transaction = {}
             app.automaticOpenAttempted = false
             app.paymentText = ""
-            app.amountText = ""
+            app.entryText = ""
             app.clearSecrets()
             scanner.running = false
             app.copyCancelled = true
@@ -408,13 +443,23 @@ ShellRoot {
     // A large amount with its conversion beneath, for the balance, a payment
     // detail and a completed payment.
     component AmountDisplay: ColumnLayout {
+        id: display
         property var amount: 0
         property bool emphasized: false
         property int size: Style.space(38)
         Layout.fillWidth: true
         spacing: Style.space(4)
-        Label { text: app.primaryAmount(parent.amount); font.bold: parent.emphasized; font.pixelSize: parent.size; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-        Label { visible: app.fiatAvailable; text: app.secondaryAmount(parent.amount); opacity: 0.55; font.pixelSize: Style.font.body; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        AnimatedAmount {
+            text: app.primaryAmount(display.amount)
+            bold: display.emphasized
+            fontSize: display.size
+            fade: surface.color
+            reducedMotion: motion.reduced
+            maxWidth: display.width
+            Layout.fillWidth: true
+            Layout.preferredHeight: implicitHeight
+        }
+        Label { visible: app.fiatAvailable; text: app.secondaryAmount(display.amount); opacity: 0.55; font.pixelSize: Style.font.body; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
     }
     component IconButton: Button {
         text: ""
@@ -468,13 +513,6 @@ ShellRoot {
                 opacity: entry.selected ? 1 : 0
             }
         }
-    }
-    component MintPicker: Ui.Dropdown {
-        Layout.fillWidth: true
-        enabled: !backend.busy && !backend.review
-        value: backend.state.selected || ""
-        options: (backend.state.mints || []).map(mint => ({value: mint.url, label: mint.name + " · " + app.amountLabel(mint.spendable)}))
-        onChanged: value => backend.request("select_mint", {url: value})
     }
     component DetailRow: RowLayout {
         property string heading: ""
@@ -546,6 +584,7 @@ ShellRoot {
                 spacing: Style.space(app.compact ? 16 : 22)
 
                 RowLayout {
+                    id: header
                     Layout.fillWidth: true
                     spacing: Style.space(6)
                     // Back/Scan/Settings stay in the layout at a constant width
@@ -746,7 +785,7 @@ ShellRoot {
                     RowLayout {
                         Layout.fillWidth: true
                         Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true }
-                        IconButton { iconText: "󰑐"; iconSpinning: backend.busy; Accessible.name: "Refresh"; enabled: !backend.busy; onClicked: backend.request("sync") }
+                        IconButton { iconText: "󰑐"; iconSpinning: backend.busy; tooltipText: ""; Accessible.name: "Refresh"; enabled: !backend.busy; onClicked: backend.request("sync") }
                     }
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
                     RowLayout {
@@ -808,7 +847,7 @@ ShellRoot {
                     Ui.TextField { id: invoiceInput; Layout.fillWidth: true; placeholderText: "Paste a Lightning invoice"; text: app.paymentText; onTextEdited: app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
                     Action { id: invoiceReview; visible: app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
                     Entry { heading: "Scan a payment"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
-                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.amountText = ""; app.go("send_amount") } }
+                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.entryText = ""; app.go("send_amount") } }
                     Entry { visible: !backend.state.selected; heading: "Choose a mint first"; onClicked: app.go("mints") }
                 }
                 ColumnLayout {
@@ -816,7 +855,7 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Receive"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Entry { id: lightningChoice; heading: "Lightning"; detail: "Create an invoice to receive from another wallet."; onClicked: { app.receiveText = ""; app.go("receive_amount") } }
+                    Entry { id: lightningChoice; heading: "Lightning"; detail: "Create an invoice to receive from another wallet."; onClicked: { app.entryText = ""; app.go("receive_amount") } }
                     Entry { heading: "Ecash"; detail: "Redeem a Cashu token someone sent you."; onClicked: { app.receiveText = ""; app.go("receive_token") } }
                     Entry { heading: "Scan a token"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
                 }
@@ -824,30 +863,73 @@ ShellRoot {
                     visible: app.walletVisible && !backend.review && (app.page === "send_amount" || app.page === "receive_amount")
                     Layout.fillWidth: true
                     spacing: Style.space(24)
+                    // The page owns keyboard focus and the amount is the only
+                    // large thing on it: no box, no cursor, no helper copy.
+                    // Layout.preferredHeight fills the panel so the button
+                    // sits at the bottom and the amount floats between.
+                    id: amountPage
+                    Layout.preferredHeight: Math.max(implicitHeight, contentScroll.availableHeight - header.height - parent.spacing)
+                    onVisibleChanged: if (visible) amountInput.forceActiveFocus()
                     Label { text: app.page === "send_amount" ? "Send ecash" : "Receive Lightning"; font.pixelSize: Style.font.heading; font.bold: true }
-                    MintPicker {}
-                    Label { text: app.amountLabel(app.selectedMint.spendable) + " available"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Item { Layout.preferredHeight: Style.space(16) }
-                    Ui.TextField {
-                        id: amountInput
-                        Layout.fillWidth: true
-                        placeholderText: "0"
-                        horizontalAlignment: TextInput.AlignHCenter
-                        font.pixelSize: Style.space(46)
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        validator: RegularExpressionValidator { regularExpression: /[0-9]{0,16}/ }
-                        text: app.page === "send_amount" ? app.amountText : app.receiveText
-                        onTextEdited: { if (app.page === "send_amount") app.amountText = text; else app.receiveText = text }
-                        onAccepted: if (amountContinue.enabled) amountContinue.clicked()
+                    Button {
+                        visible: app.mints.length > 1
+                        text: app.selectedMint.name + " · " + app.amountLabel(app.selectedMint.spendable) + " available"
+                        iconText: "󰅀"
+                        focusable: true
+                        enabled: !backend.busy
+                        opacity: 0.7
+                        Layout.alignment: Qt.AlignHCenter
+                        Accessible.name: text + ". Tap to switch mint"
+                        onClicked: { app.cycleMint(); amountInput.forceActiveFocus() }
                     }
-                    Label { text: app.bitcoinSymbol ? "₿" : "sats"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Label { text: app.page === "send_amount" ? "Review the amount and any fees before creating your token." : "Share the invoice with the person paying you."; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: app.mints.length <= 1; text: app.amountLabel(app.selectedMint.spendable) + " available"; opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Item { Layout.fillHeight: true }
+                    TextInput {
+                        id: amountInput
+                        // Invisible: it only collects keystrokes for the big
+                        // amount below, which is the thing that renders.
+                        Layout.preferredWidth: 1
+                        Layout.preferredHeight: 1
+                        opacity: 0
+                        activeFocusOnTab: true
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        text: app.entryText
+                        onTextEdited: { var clean = app.normalizeEntry(text); app.entryText = clean; if (text !== clean) text = clean }
+                        onAccepted: if (amountContinue.enabled) amountContinue.clicked()
+                        Accessible.name: "Amount"
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                        implicitHeight: bigAmount.implicitHeight
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Amount " + app.entryDisplay + (app.fiatAvailable ? ". Tap to switch unit" : "")
+                        TapHandler { onTapped: { app.swapEntryUnit(); amountInput.forceActiveFocus() } }
+                        AnimatedAmount {
+                            id: bigAmount
+                            anchors.fill: parent
+                            text: app.entryDisplay
+                            fontSize: Style.space(app.compact ? 52 : 60)
+                            fade: surface.color
+                            reducedMotion: motion.reduced
+                            maxWidth: parent.width
+                            color: app.entryOver ? Color.urgent : Color.foreground
+                            opacity: app.entryText === "" ? 0.35 : 1
+                            Behavior on opacity { enabled: !motion.reduced; NumberAnimation { duration: 150 } }
+                        }
+                    }
+                    Label {
+                        visible: app.fiatAvailable
+                        text: app.fiatEntry ? app.amountLabel(app.entrySats) : "≈ " + app.fiatText(app.entrySats)
+                        opacity: 0.55
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    Item { Layout.fillHeight: true }
                     Action {
                         id: amountContinue
-                        text: backend.busy ? "Preparing…" : app.page === "send_amount" ? "Review ecash" : "Create invoice"
-                        Layout.fillWidth: true
-                        enabled: backend.unlocked && !backend.busy && !!backend.state.selected && /[1-9]/.test(app.page === "send_amount" ? app.amountText : app.receiveText)
-                        onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", {amount: app.page === "send_amount" ? app.amountText : app.receiveText})
+                        text: backend.busy ? "Preparing…" : app.page === "send_amount" ? "Send" : "Request"
+                        enabled: backend.unlocked && !backend.busy && !!backend.state.selected && app.entrySats > 0 && !app.entryOver
+                        onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", {amount: String(app.entrySats)})
                     }
                 }
                 ColumnLayout {

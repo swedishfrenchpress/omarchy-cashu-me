@@ -26,10 +26,10 @@ CONTROLS = '''
             if (enablePasswordButton.enabled) enablePasswordButton.clicked()
         }
         function mint(): void { app.go("mints"); app.go("add_mint"); app.mintUrl = "http://127.0.0.1:33381"; if (addMintButton.enabled) addMintButton.clicked() }
-        function invoice(): void { app.go("receive"); lightningChoice.clicked(); app.receiveText = "64"; if (amountContinue.enabled) amountContinue.clicked() }
+        function invoice(): void { app.go("receive"); lightningChoice.clicked(); app.entryText = "64"; if (amountContinue.enabled) amountContinue.clicked() }
         function sync(): void { backend.request("sync") }
         function phrase(): void { app.go("backup"); backend.request("recovery_phrase") }
-        function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.amountText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
+        function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.entryText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
         function confirm(): void { if (confirmButton.enabled) confirmButton.clicked() }
         function back(): void { app.back() }
         function capture(): void { surface.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }

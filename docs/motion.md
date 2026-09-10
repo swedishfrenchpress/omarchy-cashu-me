@@ -10,7 +10,8 @@ Reference: [Emil Kowalski’s design and animation skills](https://github.com/em
 | Button color feedback only | Passive press observation, scale 0.98, 100 ms press / 160 ms release | Immediate tactile feedback; existing Omarchy click, focus and color behavior remains authoritative |
 | Onboarding mark takes 1100 ms with all rings together | 250 ms per ring, 50 ms stagger, short transform offset | First-use delight with no interaction delay |
 | Success checkmark appears abruptly | 250 ms opacity + scale 0.95 → 1, once per completion | Acknowledges confirmed success without animating the amount |
-| No motion preference | Settings → Reduce motion, persisted independently of wallet keys | Removes translation/scale; keeps a gentle 125 ms fade |
+| Amounts snap to new values | `AnimatedAmount`: each digit is a clipped 0…9,0 wheel that rolls the short way in the direction the number moved over 600 ms, a new place fades in and rolls up from zero, surviving columns slide over; prefix and suffix marks stay put | Typing on the amount page and a balance change after a refresh read as one continuous number rather than a flash |
+| No motion preference | Settings → Reduce motion, persisted independently of wallet keys | Removes translation/scale; keeps a gentle 125 ms fade; digit wheels snap |
 | Expand tooltip binds to a signal | Uses native Omarchy tooltipText | Correct hover behavior and consistent styling |
 
 ## Frequency and function gates
