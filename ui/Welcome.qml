@@ -101,7 +101,8 @@ ColumnLayout {
     MotionButton {
         reducedMotion: root.reducedMotion
         text: "Restore a wallet"
-        Layout.alignment: Qt.AlignHCenter
+        Layout.fillWidth: true
+        Layout.minimumHeight: Style.space(42)
         focusable: true
         enabled: !root.busy
         onClicked: root.restoreRequested()

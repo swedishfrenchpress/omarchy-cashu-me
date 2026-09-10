@@ -56,7 +56,7 @@ ShellRoot {
     readonly property bool mainPage: ["home", "history", "mints"].indexOf(page) >= 0
     readonly property var activity: (backend.state.history || []).filter(tx => {
         var direction = historyFilter === "all" || (historyFilter === "received" ? tx.direction === "Incoming" : tx.direction === "Outgoing")
-        return direction && (tx.kind + " " + tx.status + " " + tx.amount + " " + (tx.mint_name || "")).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
+        return direction && (app.titleFor(tx) + " " + tx.status + " " + tx.amount + " " + (tx.mint_name || "")).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
     })
     // A space groups digits at one full monospace character's width in
     // Style.font.family, which reads as a much bigger gap between thousands
@@ -68,33 +68,52 @@ ShellRoot {
     readonly property string fiatCurrency: (backend.state.display && backend.state.display.fiat_currency) || ""
     function setDisplay(useBitcoinSymbol, currency) { backend.request("set_display", {bitcoin_symbol: useBitcoinSymbol, fiat_currency: currency || ""}) }
     function currencyInfo(code) { return (backend.state.currencies || []).find(currency => currency.code === code) }
-    // BIP-177 style: "₿21 000" instead of "21 000 sats". Applies everywhere
+    // BIP-177 style: "₿21,000" instead of "21,000 sats". Applies everywhere
     // an amount is shown; the underlying value is always the same sats.
-    function amountLabel(value) { return app.bitcoinSymbol ? "₿ " + app.sats(value) : app.sats(value) + " sats" }
-    // The home balance alone cycles to an approximate fiat value on tap,
-    // once a local currency is enabled.
+    function amountLabel(value) { return app.bitcoinSymbol ? "₿" + app.sats(value) : app.sats(value) + " sats" }
+    // Once a local currency is enabled and its rate is known, every amount
+    // shows both units: the primary one large, the other small and muted.
+    // Tapping the home balance swaps which unit is primary, everywhere.
     property string balanceUnit: "bitcoin"
     onFiatCurrencyChanged: if (fiatCurrency === "") balanceUnit = "bitcoin"
     function cycleBalanceUnit() { if (app.fiatCurrency) app.balanceUnit = app.balanceUnit === "bitcoin" ? "fiat" : "bitcoin" }
-    readonly property bool showingFiat: app.balanceUnit === "fiat" && app.fiatCurrency !== "" && !!backend.state.exchange_rate && backend.state.exchange_rate.currency === app.fiatCurrency
+    readonly property bool fiatAvailable: app.fiatCurrency !== "" && !!backend.state.exchange_rate && backend.state.exchange_rate.currency === app.fiatCurrency
+    readonly property bool showingFiat: app.balanceUnit === "fiat" && app.fiatAvailable
     function fiatText(value) {
         var info = app.currencyInfo(app.fiatCurrency)
+        var symbol = info ? info.symbol : ""
         var rate = backend.state.exchange_rate ? Number(backend.state.exchange_rate.rate) : 0
         var decimals = (app.fiatCurrency === "JPY" || app.fiatCurrency === "KRW") ? 0 : 2
-        var converted = (Number(value || 0) * rate / 100000000).toFixed(decimals)
+        var exact = Number(value || 0) * rate / 100000000
+        var converted = exact.toFixed(decimals)
+        // A few sats round to nothing; "<$0.01" says there is a real amount.
+        if (exact > 0 && Number(converted) === 0) return "<" + symbol + (decimals ? "0." + "0".repeat(decimals - 1) + "1" : "1")
         var pieces = converted.split(".")
         pieces[0] = app.sats(pieces[0])
-        return (info ? info.symbol : "") + pieces.join(".")
+        return symbol + pieces.join(".")
     }
-    readonly property string homeValue: app.showingFiat ? app.fiatText(app.totalSpendable) : (app.bitcoinSymbol ? "₿ " + app.sats(app.totalSpendable) : app.sats(app.totalSpendable))
+    function primaryAmount(value) { return app.showingFiat ? app.fiatText(value) : app.amountLabel(value) }
+    function secondaryAmount(value) { return app.showingFiat ? app.amountLabel(value) : app.fiatText(value) }
+    readonly property string homeValue: app.primaryAmount(app.totalSpendable)
     readonly property string homeUnit: app.showingFiat ? app.fiatCurrency : (app.bitcoinSymbol ? "" : "sats")
-    function titleFor(tx) { return (tx.kind || "Payment") + (tx.direction === "Incoming" ? " received" : " sent") }
+    // iOS system green, the light and dark variants, chosen by the theme's
+    // background. Omarchy themes have no green token of their own.
+    readonly property color received: Color.background.hslLightness < 0.5 ? "#30D158" : "#34C759"
+    function titleFor(tx) {
+        var lightning = tx.kind === "Lightning"
+        return (tx.kind || "Payment") + (tx.direction === "Incoming" ? " received" : lightning ? " paid" : " sent")
+    }
     // Dates follow the Omarchy clock format in shell.json, without the year.
     property var clockSettings: ({})
     readonly property string dateFormat: ClockFormat.dateFormat(clockSettings.format || ClockFormat.defaultFormat, clockSettings.formatAlt || ClockFormat.defaultAltFormat)
     readonly property string timeFormat: ClockFormat.timeFormat(clockSettings.format || ClockFormat.defaultFormat)
-    function dayFor(tx) { return tx && tx.timestamp ? ClockFormat.format(new Date(tx.timestamp * 1000), dateFormat) : "" }
     function momentFor(seconds) { return seconds ? ClockFormat.format(new Date(seconds * 1000), dateFormat + " " + timeFormat) : "" }
+    // Activity rows show the time for today's payments and the date otherwise.
+    function whenFor(tx) {
+        if (!tx || !tx.timestamp) return ""
+        var when = new Date(tx.timestamp * 1000)
+        return when.toDateString() === new Date().toDateString() ? ClockFormat.format(when, timeFormat) : ClockFormat.format(when, dateFormat)
+    }
     function go(destination) {
         if (backend.busy || backend.review) return
         if (destination === "scan") scanTarget = "payment"
@@ -312,11 +331,90 @@ ShellRoot {
         textFormat: Text.PlainText
     }
     component Button: MotionButton { reducedMotion: motion.reduced }
+    // Every full-size button fills its layout and takes an equal share of a
+    // row. Qt sizes fill items from their text before sharing the rest, so
+    // without a common preferred width "Receive" and "Send" ended up unequal.
     component Action: Button {
         focusable: true
         bordered: true
         opacity: enabled ? 1 : 0.4
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
         Layout.minimumHeight: Style.space(38)
+    }
+    component Secondary: Button {
+        focusable: true
+        opacity: enabled ? 1 : 0.4
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        Layout.minimumHeight: Style.space(38)
+    }
+    component Tab: Button {
+        focusable: true
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+    }
+    // One payment in a list: a circled arrow, the type over the time, and the
+    // amount in the primary unit over its conversion. Incoming amounts are
+    // green; nothing in the row is bold.
+    component ActivityRow: Button {
+        id: activityRow
+        required property var modelData
+        readonly property bool incoming: modelData.direction === "Incoming"
+        text: ""
+        focusable: true
+        Layout.fillWidth: true
+        implicitHeight: activityContent.implicitHeight + Style.space(20)
+        implicitWidth: Style.space(240)
+        Accessible.name: app.titleFor(modelData) + ". " + app.whenFor(modelData) + ". " + (incoming ? "plus " : "") + app.primaryAmount(modelData.amount)
+        onClicked: { app.transaction = modelData; app.go("transaction") }
+        RowLayout {
+            id: activityContent
+            anchors.fill: parent
+            anchors.margins: Style.space(10)
+            spacing: Style.space(14)
+            Rectangle {
+                Layout.preferredWidth: Style.space(36)
+                Layout.preferredHeight: Style.space(36)
+                radius: width / 2
+                color: Qt.alpha(Color.foreground, 0.12)
+                Text {
+                    anchors.centerIn: parent
+                    text: activityRow.incoming ? "󰁅" : "󰁝"
+                    color: Color.foreground
+                    opacity: 0.7
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.icon
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                spacing: Style.space(3)
+                Label { text: app.titleFor(activityRow.modelData); Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+                Label { text: app.whenFor(activityRow.modelData); opacity: 0.55; font.pixelSize: Style.font.caption }
+            }
+            ColumnLayout {
+                spacing: Style.space(3)
+                Label {
+                    text: (activityRow.incoming ? "+" : "") + app.primaryAmount(activityRow.modelData.amount)
+                    color: activityRow.incoming ? app.received : Color.foreground
+                    Layout.alignment: Qt.AlignRight
+                }
+                Label { visible: app.fiatAvailable; text: app.secondaryAmount(activityRow.modelData.amount); opacity: 0.55; font.pixelSize: Style.font.caption; Layout.alignment: Qt.AlignRight }
+            }
+        }
+    }
+    // A large amount with its conversion beneath, for the balance, a payment
+    // detail and a completed payment.
+    component AmountDisplay: ColumnLayout {
+        property var amount: 0
+        property bool emphasized: false
+        property int size: Style.space(38)
+        Layout.fillWidth: true
+        spacing: Style.space(4)
+        Label { text: app.primaryAmount(parent.amount); font.bold: parent.emphasized; font.pixelSize: parent.size; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        Label { visible: app.fiatAvailable; text: app.secondaryAmount(parent.amount); opacity: 0.55; font.pixelSize: Style.font.body; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
     }
     component IconButton: Button {
         text: ""
@@ -532,8 +630,8 @@ ShellRoot {
                     spacing: Style.space(16)
                     Label { text: "Bring your wallet home"; font.bold: true; font.pixelSize: Style.font.heading }
                     Label { text: "Restore your encrypted backup or use your recovery words and mint URLs."; opacity: 0.65; Layout.fillWidth: true }
-                    Button { text: "Choose a backup file"; focusable: true; onClicked: importDialog.open() }
-                    Button { text: "Use recovery words"; focusable: true; onClicked: app.phraseRestore = !app.phraseRestore }
+                    Secondary { text: "Choose a backup file"; onClicked: importDialog.open() }
+                    Secondary { text: "Use recovery words"; onClicked: app.phraseRestore = !app.phraseRestore }
                     Controls.TextArea {
                         id: restoreWords
                         visible: app.phraseRestore && !backend.state.exists
@@ -577,12 +675,12 @@ ShellRoot {
                             backend.request("restore_backup", {path: app.restorePath, backup_password: restorePassword.text})
                         }
                     }
-                    Button { text: "Back"; focusable: true; onClicked: app.restoreMode = false }
+                    Secondary { text: "Back"; onClicked: app.restoreMode = false }
                 }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
                 Label { visible: backend.notice !== "" && app.page !== "complete"; text: backend.notice; Layout.fillWidth: true }
                 Label { visible: scanner.running; text: "Scanning… Hold one QR code steady. Scanning stops after one minute."; Layout.fillWidth: true; opacity: 0.65 }
-                Button { visible: scanner.running; text: "Cancel scan"; focusable: true; onClicked: scanner.running = false }
+                Secondary { visible: scanner.running; text: "Cancel scan"; onClicked: scanner.running = false }
 
                 ColumnLayout {
                     visible: !!backend.review
@@ -604,7 +702,7 @@ ShellRoot {
                         Layout.fillWidth: true
                         onClicked: backend.request("confirm_payment", {review_id: backend.reviewId})
                     }
-                    Button { text: "Cancel"; focusable: true; enabled: !backend.busy; Layout.alignment: Qt.AlignHCenter; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
+                    Secondary { text: "Cancel"; enabled: !backend.busy; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "home"
@@ -617,24 +715,18 @@ ShellRoot {
                         Accessible.role: Accessible.Button
                         Accessible.name: "Balance, " + app.homeValue + " " + (app.homeUnit || (app.bitcoinSymbol ? "bitcoin" : "sats")) + (app.fiatCurrency ? ". Tap to switch between bitcoin and " + app.fiatCurrency + "." : "")
                         TapHandler { enabled: !!app.fiatCurrency; onTapped: app.cycleBalanceUnit() }
-                        ColumnLayout {
-                            id: balanceColumn
-                            anchors.fill: parent
-                            spacing: 0
-                            // The unit and the tap hint are accessible-only
-                            // (see Accessible.name above): the ₿/$ already in
-                            // homeValue, plus the Receive/Send context, say
-                            // enough without a second caption line.
-                            Label { text: app.homeValue; font.pixelSize: Style.space(app.compact ? 46 : 54); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                        }
+                        // The unit and the tap hint are accessible-only (see
+                        // Accessible.name above): the ₿/$ already in the
+                        // amount says enough without a caption line.
+                        AmountDisplay { id: balanceColumn; anchors.fill: parent; amount: app.totalSpendable; emphasized: true; size: Style.space(app.compact ? 46 : 54) }
                     }
                     Label { visible: backend.state.restoring === true; text: "Recovering from your mints…"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
                     Label { visible: app.unavailableMints.length > 0; text: (app.unavailableMints.length === 1 ? app.unavailableMints[0].name + " is unavailable." : app.unavailableMints.length + " mints are unavailable.") + " Balance may be out of date."; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; opacity: 0.6 }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.space(12)
-                        Action { text: "↓  Receive"; Layout.fillWidth: true; onClicked: app.go("receive") }
-                        Action { text: "↑  Send"; Layout.fillWidth: true; onClicked: app.go("send") }
+                        Action { text: "Receive"; onClicked: app.go("receive") }
+                        Action { text: "Send"; onClicked: app.go("send") }
                     }
                     Entry { visible: !(backend.state.mints || []).length; heading: "Choose your first mint"; detail: "A mint issues and redeems your ecash."; onClicked: app.go("add_mint") }
                     Entry { visible: app.totalPending > 0 || app.totalReserved > 0; heading: "Pending activity"; detail: app.amountLabel(app.totalPending) + " pending · " + app.amountLabel(app.totalReserved) + " reserved"; onClicked: app.tab("history") }
@@ -643,43 +735,30 @@ ShellRoot {
                     Label { visible: !(backend.state.history || []).length; text: "No payments yet"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Repeater {
                         model: (backend.state.history || []).slice(0, 3)
-                        delegate: Entry {
-                            required property var modelData
-                            heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
-                            detail: app.dayFor(modelData) + " · " + modelData.status
-                            trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.amountLabel(modelData.amount)
-                            onClicked: { app.transaction = modelData; app.go("transaction") }
-                        }
+                        delegate: ActivityRow {}
                     }
-                    Button { text: "View all activity  ›"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
+                    Secondary { text: "View all activity  ›"; onClicked: app.tab("history") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "history"
                     Layout.fillWidth: true
                     spacing: Style.space(16)
-                    RowLayout { Layout.fillWidth: true; Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true } Button { text: "Refresh"; focusable: true; enabled: !backend.busy; onClicked: backend.request("sync") } }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: "History"; font.pixelSize: Style.font.heading; font.bold: true; Layout.fillWidth: true }
+                        IconButton { iconText: "󰑐"; iconSpinning: backend.busy; Accessible.name: "Refresh"; enabled: !backend.busy; onClicked: backend.request("sync") }
+                    }
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
                     RowLayout {
                         Layout.fillWidth: true
                         Repeater { model: [{id:"all", name:"All"}, {id:"received", name:"Received"}, {id:"sent", name:"Sent"}]
-                            delegate: Button { required property var modelData; Layout.fillWidth: true; text: modelData.name; selected: app.historyFilter === modelData.id; focusable: true; onClicked: app.historyFilter = modelData.id }
+                            delegate: Tab { required property var modelData; text: modelData.name; selected: app.historyFilter === modelData.id; onClicked: app.historyFilter = modelData.id }
                         }
                     }
                     Label { visible: !app.activity.length; text: "No matching activity"; opacity: 0.6 }
                     Repeater {
                         model: app.activity
-                        delegate: ColumnLayout {
-                            required property var modelData
-                            required property int index
-                            Layout.fillWidth: true
-                            Label { visible: index === 0 || app.dayFor(modelData) !== app.dayFor(app.activity[index - 1]); text: app.dayFor(modelData); opacity: 0.55; font.pixelSize: Style.font.caption }
-                            Entry {
-                                heading: (modelData.direction === "Incoming" ? "↓  " : "↑  ") + app.titleFor(modelData)
-                                detail: modelData.status + (app.mints.length > 1 && modelData.mint_name ? " · " + modelData.mint_name : "")
-                                trailing: (modelData.direction === "Incoming" ? "+" : "−") + app.amountLabel(modelData.amount)
-                                onClicked: { app.transaction = modelData; app.go("transaction") }
-                            }
-                        }
+                        delegate: ActivityRow {}
                     }
                     Label { text: "Showing up to 100 recent payments across your mints."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
                     Label { visible: (backend.state.pending_invoices || []).length > 0; text: "Pending invoices"; font.bold: true }
@@ -689,7 +768,7 @@ ShellRoot {
                             required property var modelData
                             Layout.fillWidth: true
                             Label { text: app.amountLabel(modelData.amount) + " · " + (modelData.expiry * 1000 < Date.now() ? "expired" : "awaiting payment") + (app.mints.length > 1 && modelData.mint_name ? " · " + modelData.mint_name : ""); Layout.fillWidth: true }
-                            Action { text: "Show"; enabled: !backend.busy; onClicked: backend.request("show_invoice", {operation_id: modelData.id}) }
+                            Action { text: "Show"; Layout.fillWidth: false; Layout.preferredWidth: -1; enabled: !backend.busy; onClicked: backend.request("show_invoice", {operation_id: modelData.id}) }
                         }
                     }
                     Label { visible: (backend.state.pending_sends || []).length > 0; text: "Unclaimed ecash"; font.bold: true }
@@ -712,7 +791,7 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { text: app.amountLabel(app.transaction.amount); font.pixelSize: Style.space(38); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    AmountDisplay { amount: app.transaction.amount; emphasized: true }
                     DetailRow { heading: "Status"; value: app.transaction.status || "" }
                     DetailRow { heading: "Fee"; value: app.amountLabel(app.transaction.fee) }
                     DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
@@ -779,7 +858,7 @@ ShellRoot {
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Paste a Cashu token"; text: app.receiveText; onTextEdited: app.receiveText = text }
                     Label { text: "The token is redeemed with its issuing mint. Add an unfamiliar mint before receiving its ecash."; Layout.fillWidth: true; opacity: 0.6 }
                     Action { text: backend.busy ? "Preparing…" : "Review token"; Layout.fillWidth: true; enabled: backend.unlocked && !backend.busy && app.receiveText.trim() !== ""; onClicked: backend.request("receive_token", {text: app.receiveText}) }
-                    Button { text: "Scan instead"; focusable: true; onClicked: app.go("scan") }
+                    Secondary { text: "Scan instead"; onClicked: app.go("scan") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "scan"
@@ -806,7 +885,7 @@ ShellRoot {
                         Layout.fillWidth: true
                         onClicked: { app.clipboardText = backend.share.token || backend.share.invoice || ""; clipboard.stdinEnabled = true; clipboard.running = true }
                     }
-                    Button { text: app.revealShare ? "Hide text" : "Show full text"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.revealShare = !app.revealShare }
+                    Secondary { text: app.revealShare ? "Hide text" : "Show full text"; onClicked: app.revealShare = !app.revealShare }
                     Controls.TextArea {
                         visible: app.revealShare
                         Layout.fillWidth: true; readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
@@ -814,7 +893,7 @@ ShellRoot {
                         background: Rectangle { color: "transparent" }
                     }
                     Label { text: backend.share.token ? "Anyone holding this token can redeem it. Reopen or reclaim it from History." : "You can close this window. Your unlocked wallet keeps checking for payment."; opacity: 0.6; Layout.fillWidth: true }
-                    Button { text: "Done"; focusable: true; Layout.alignment: Qt.AlignHCenter; onClicked: app.back() }
+                    Secondary { text: "Done"; onClicked: app.back() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "complete"
@@ -828,8 +907,8 @@ ShellRoot {
                         receipt: JSON.stringify(backend.completion)
                     }
                     Label { text: backend.completion.paid ? "Payment sent" : backend.completion.reclaimed ? "Ecash reclaimed" : "Payment received"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Label { text: app.amountLabel(backend.completion.amount); font.pixelSize: Style.space(40); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Action { text: "Back to wallet"; Layout.fillWidth: true; onClicked: app.back() }
+                    AmountDisplay { amount: backend.completion.amount; emphasized: true; size: Style.space(40) }
+                    Action { text: "Back to wallet"; onClicked: app.back() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "mints"
@@ -863,10 +942,10 @@ ShellRoot {
                         delegate: Entry { required property var modelData; heading: modelData.name; detail: modelData.url; showsActiveMark: true; selected: app.mintUrl === modelData.url; onClicked: app.mintUrl = modelData.url }
                     }
                     Ui.TextField { id: mintInput; Layout.fillWidth: true; placeholderText: "Or enter a mint URL"; text: app.mintUrl; onTextEdited: app.mintUrl = text }
-                    Button { text: "Scan mint URL"; focusable: true; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
+                    Secondary { text: "Scan mint URL"; onClicked: { app.go("scan"); app.scanTarget = "mint" } }
                     Label { text: "Adding a mint means trusting its operator to redeem your ecash."; opacity: 0.6; Layout.fillWidth: true }
                     Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
-                    Button { text: "View my mints"; focusable: true; onClicked: app.tab("mints") }
+                    Secondary { text: "View my mints"; onClicked: app.tab("mints") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "settings"
@@ -891,7 +970,7 @@ ShellRoot {
                     Divider {}
                     Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
                     Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked && !backend.busy && !backend.review; Layout.fillWidth: true; onClicked: backend.lock() }
-                    Button { text: "Quit Chaumarchy"; focusable: true; onClicked: Qt.quit() }
+                    Secondary { text: "Quit Chaumarchy"; onClicked: Qt.quit() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "display"
@@ -900,7 +979,7 @@ ShellRoot {
                     Label { text: "Display"; font.bold: true; font.pixelSize: Style.font.heading }
                     Entry {
                         heading: "Bitcoin symbol"
-                        detail: "Show ₿21 000 instead of 21 000 sats"
+                        detail: "Show ₿21,000 instead of 21,000 sats"
                         trailing: app.bitcoinSymbol ? "On" : "Off"
                         onClicked: app.setDisplay(!app.bitcoinSymbol, app.fiatCurrency)
                     }
@@ -973,7 +1052,7 @@ ShellRoot {
                     Label { visible: backend.recoveryPhrase !== ""; text: backend.recoveryPhrase; Layout.fillWidth: true; font.bold: true }
                     Label { visible: backend.recoveryPhrase !== ""; text: (backend.state.mints || []).map(mint => mint.url).join("\n"); Layout.fillWidth: true }
                     Label { visible: backend.recoveryPhrase !== ""; text: "Write these words down privately, together with your mint URLs. This view hides after one minute. A phrase does not restore your full history."; opacity: 0.65; Layout.fillWidth: true }
-                    Button { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; focusable: true; onClicked: backend.recoveryPhrase = "" }
+                    Secondary { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
                     Label { text: "A backup travels, so it is the file most likely to be copied. Several random words make a far stronger passphrase than a short complicated one."; opacity: 0.65; Layout.fillWidth: true }
                     Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup passphrase (12+ characters)"; Layout.fillWidth: true }
                     Ui.TextField { id: backupConfirmation; password: true; placeholderText: "Repeat backup password"; Layout.fillWidth: true }
@@ -1009,7 +1088,7 @@ ShellRoot {
             spacing: Style.space(12)
             Repeater {
                 model: [{id:"home", label:"Wallet"}, {id:"history", label:"History"}, {id:"mints", label:"Mints"}]
-                delegate: Button { required property var modelData; text: modelData.label; selected: app.page === modelData.id; focusable: true; Layout.fillWidth: true; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
+                delegate: Tab { required property var modelData; text: modelData.label; selected: app.page === modelData.id; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
             }
         }
         }

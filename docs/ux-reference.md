@@ -14,7 +14,7 @@ artwork, screenshots, or platform styling.
 | --- | --- |
 | Wallet / History / Mints tabs | Persistent native navigation on the three main pages; Ctrl+1/2/3 shortcuts. |
 | Mint selector above balance | The wallet page shows the total balance across mints, as Cashu.me does; the Mints page lists each mint's balance and marks the mint used for new payments. Receive before Send. |
-| Small recent activity section | Three recent rows and View all activity; direction, amount, and status remain explicit. |
+| Small recent activity section | Three recent rows and View all activity. Each row is a circled direction arrow, the payment type ("Lightning received", "Ecash sent", "Lightning paid") over its time or date, and the amount in the primary unit over its conversion. Incoming amounts are iOS system green; the mint and status live on the detail page. |
 | History list and transaction detail | Date grouping, text search, incoming/outgoing filters, and detail pages showing amount, fee, status, date, and mint. History spans every mint; the backend supplies the 100 most recent transactions across them. Dates use the Omarchy clock format from shell.json without the year; detail pages add its time part. |
 | Payment-method chooser | Invoice entry plus Scan/Send ecash choices; separate Lightning/Ecash/Scan receive choices. Unsupported methods are not offered. |
 | Amount-first flow | Large sats entry, mint selector, available balance, and a distinct review step. Desktop keyboard entry replaces a touch keypad. |
@@ -24,8 +24,8 @@ artwork, screenshots, or platform styling.
 | Confirmed payment result | Dedicated result page for confirmed sends, receives, and reclaim. A displayed Lightning invoice becomes Payment received only when CDK reports it issued. |
 | Mint list and discovery | Mint rows with balances and selection state; four user-selected suggestions, custom URLs, and QR URL entry with explicit trust/add. |
 | Settings rows | Short index linking to Backup & recovery, Security, Mints, and Display. Password remains optional. |
-| Tap balance to switch units | The home balance alone toggles between bitcoin and a selected local currency on tap, as cashu.me's balance does. Sats stay the actual amount everywhere; fiat is a display-only estimate. |
-| BIP-177 bitcoin symbol | Settings → Display offers "₿ 21 000" instead of "21 000 sats" ([bips.dev/177](https://bips.dev/177/)), applied to every amount shown, not only the home balance. |
+| Tap balance to switch units | With a local currency enabled, every amount shows the primary unit large and the other small and muted. Tapping the home balance swaps which unit is primary, everywhere. Sats stay the actual amount everywhere; fiat is a display-only estimate, and a few sats show as "<$0.01". |
+| BIP-177 bitcoin symbol | Settings → Display offers "₿21,000" instead of "21,000 sats" ([bips.dev/177](https://bips.dev/177/)), applied to every amount shown, not only the home balance. |
 
 Omarchy owns fonts, spacing, colors, control borders, focus/hover states, and
 corner radius. The user's animated welcome remains. No iOS/Android palette,
