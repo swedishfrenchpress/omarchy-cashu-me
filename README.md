@@ -41,7 +41,7 @@ Settings → **Display** offers the [BIP-177](https://bips.dev/177/) bitcoin sym
 
 Balances stay separate by mint. A token from an unfamiliar mint requires explicitly adding that mint first. This version uses sats and static QR codes. Large tokens can be copied as text. Lightning addresses, BOLT12, on-chain transfers, animated QR, and automatic transfers between mints are outside this milestone.
 
-Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and the back arrow, Escape, or Alt+Left to go back. Scan and Settings are icons beside the expand control at the top right. Payment confirmation remains explicit.
+Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and the back arrow, Escape, or Alt+Left to go back. Settings is the top-left icon on the main pages, where Back appears elsewhere; Scan sits beside the expand control at the top right. Payment confirmation remains explicit.
 
 ## Optional password
 

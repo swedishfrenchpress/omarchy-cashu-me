@@ -389,8 +389,13 @@ ShellRoot {
         Layout.preferredWidth: 1
         Layout.minimumHeight: Style.space(38)
     }
+    // One of a mutually exclusive set, with the chrome of the kit's own
+    // Ui.ButtonGroup chips: bordered, and `selected` paints the chosen one.
+    // ButtonGroup itself sizes chips to their text, so the equal-width
+    // layout stays ours.
     component Tab: Button {
         focusable: true
+        bordered: true
         Layout.fillWidth: true
         Layout.preferredWidth: 1
     }
@@ -434,7 +439,7 @@ ShellRoot {
                 Layout.minimumWidth: 0
                 spacing: Style.space(3)
                 Label { text: app.titleFor(activityRow.modelData); Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap }
-                Label { text: app.whenFor(activityRow.modelData); opacity: 0.55; font.pixelSize: Style.font.caption }
+                Label { text: app.whenFor(activityRow.modelData); opacity: 0.55; font.pixelSize: Style.font.bodySmall }
             }
             ColumnLayout {
                 spacing: Style.space(3)
@@ -443,7 +448,7 @@ ShellRoot {
                     color: activityRow.incoming ? app.received : Color.foreground
                     Layout.alignment: Qt.AlignRight
                 }
-                Label { visible: app.fiatAvailable; text: app.secondaryAmount(activityRow.modelData.amount); opacity: 0.55; font.pixelSize: Style.font.caption; Layout.alignment: Qt.AlignRight }
+                Label { visible: app.fiatAvailable; text: app.secondaryAmount(activityRow.modelData.amount); opacity: 0.55; font.pixelSize: Style.font.bodySmall; Layout.alignment: Qt.AlignRight }
             }
         }
     }
@@ -471,7 +476,9 @@ ShellRoot {
             Layout.fillWidth: true
             Layout.preferredHeight: implicitHeight
         }
-        Label { visible: app.fiatAvailable; text: app.secondaryAmount(display.amount); opacity: 0.55; font.pixelSize: Style.font.body; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        // The conversion scales with the number above it, about two fifths
+        // of its size as in cashubtc/wallet, never below the title size.
+        Label { visible: app.fiatAvailable; text: app.secondaryAmount(display.amount); opacity: 0.55; font.pixelSize: Math.max(Style.font.title, Math.round(display.size * 0.4)); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
     }
     component IconButton: Button {
         text: ""
@@ -609,15 +616,17 @@ ShellRoot {
                     // whenever the wallet is visible, and only fade in or out of
                     // relevance per page. Toggling `visible` instead removed
                     // this icon's width from the row and shifted its neighbours.
+                    // The left slot is Settings on the three main pages and
+                    // Back everywhere else, as in cashubtc/wallet's toolbar.
+                    // A review has Cancel as its only way back, so it is empty.
                     IconButton {
                         visible: app.walletVisible
-                        enabled: !app.mainPage && !backend.review && !backend.busy
-                        // A review has Cancel as its only way back.
-                        opacity: app.mainPage || backend.review ? 0 : (enabled ? 1 : 0.4)
-                        Accessible.ignored: app.mainPage || !!backend.review
-                        iconText: "󰁍"
-                        Accessible.name: "Back"
-                        onClicked: app.back()
+                        enabled: !backend.review && !backend.busy
+                        opacity: backend.review ? 0 : (enabled ? 1 : 0.4)
+                        Accessible.ignored: !!backend.review
+                        iconText: app.mainPage ? "󰒓" : "󰁍"
+                        Accessible.name: app.mainPage ? "Settings" : "Back"
+                        onClicked: app.mainPage ? app.go("settings") : app.back()
                     }
                     Item { Layout.fillWidth: true }
                     IconButton {
@@ -628,15 +637,6 @@ ShellRoot {
                         iconText: "󰐲"
                         Accessible.name: "Scan a QR code"
                         onClicked: app.go("scan")
-                    }
-                    IconButton {
-                        visible: app.walletVisible
-                        enabled: app.mainPage && !backend.review && !backend.busy
-                        opacity: app.mainPage ? (enabled ? 1 : 0.4) : 0
-                        Accessible.ignored: !app.mainPage
-                        iconText: "󰒓"
-                        Accessible.name: "Settings"
-                        onClicked: app.go("settings")
                     }
                     IconButton {
                         iconText: app.compact ? "󰁜" : "󰁃"
@@ -937,6 +937,7 @@ ShellRoot {
                     Label {
                         visible: app.fiatAvailable
                         text: app.fiatEntry ? app.amountLabel(app.entrySats) : "≈ " + app.fiatText(app.entrySats)
+                        font.pixelSize: Math.round(bigAmount.fontSize * 0.4)
                         opacity: 0.55
                         Layout.fillWidth: true
                         horizontalAlignment: Text.AlignHCenter
