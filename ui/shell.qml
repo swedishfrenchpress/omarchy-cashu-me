@@ -99,6 +99,11 @@ ShellRoot {
     // iOS system green, the light and dark variants, chosen by the theme's
     // background. Omarchy themes have no green token of their own.
     readonly property color received: Color.background.hslLightness < 0.5 ? "#30D158" : "#34C759"
+    // The worker identifies a mint by URL; people know it by name.
+    function mintName(url) {
+        var mint = app.mints.find(mint => mint.url === url)
+        return mint ? mint.name : (url || "")
+    }
     function titleFor(tx) {
         var lightning = tx.kind === "Lightning"
         return (tx.kind || "Payment") + (tx.direction === "Incoming" ? " received" : lightning ? " paid" : " sent")
@@ -522,9 +527,13 @@ ShellRoot {
     component DetailRow: RowLayout {
         property string heading: ""
         property string value: ""
+        // Leading rows keep the value beside its heading on the left instead
+        // of pushing it to the far edge.
+        property bool leading: false
         Layout.fillWidth: true
+        spacing: Style.space(12)
         Label { text: parent.heading; opacity: 0.6 }
-        Label { text: parent.value; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+        Label { text: parent.value; Layout.fillWidth: true; horizontalAlignment: parent.leading ? Text.AlignLeft : Text.AlignRight }
     }
     component ScanButtons: RowLayout {
         property string target: app.scanTarget
@@ -733,7 +742,7 @@ ShellRoot {
                     Label { text: backend.review ? backend.review.kind : ""; font.pixelSize: Style.font.heading; font.bold: true }
                     Label { text: backend.review && backend.review.amount ? app.amountLabel(backend.review.amount) : "Reclaim unspent ecash"; font.pixelSize: Style.space(36); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Divider {}
-                    DetailRow { heading: "Mint"; value: backend.review ? backend.review.mint : "" }
+                    DetailRow { heading: "Mint"; value: backend.review ? app.mintName(backend.review.mint) : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.fee; heading: "Maximum fee"; value: backend.review ? app.amountLabel(backend.review.fee) : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.total; heading: "Maximum total"; value: backend.review ? app.amountLabel(backend.review.total) : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.expiry; heading: "Quote expires"; value: backend.review && backend.review.expiry ? app.momentFor(backend.review.expiry) : "" }
@@ -961,10 +970,12 @@ ShellRoot {
                     spacing: Style.space(20)
                     Label { text: backend.share.token ? "Pending ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
-                    Label { text: app.amountLabel(backend.share.amount); visible: !!backend.share.amount; font.pixelSize: Style.space(32); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    // Shown in the unit the amount was typed in, with the
+                    // other beneath, so a dollar request still reads as one.
+                    AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(32); animated: false }
                     Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    DetailRow { heading: "Mint"; value: backend.share.mint || app.selectedMint.name }
-                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry) }
+                    DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
+                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
                     Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
                         text: clipboard.running ? "Copied · waiting for paste" : backend.share.token ? "Copy token" : "Copy invoice"

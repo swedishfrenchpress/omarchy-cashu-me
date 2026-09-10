@@ -83,10 +83,10 @@ Item {
         id: row
         anchors.centerIn: parent
         spacing: 0
-        add: Transition {
-            enabled: !root.reducedMotion
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: root.duration / 3 }
-        }
+        // No `add` transition: a positioner transition on a column added
+        // while the page is hidden starts it at opacity 0 and never ends,
+        // so a payment completed off-screen showed "$ 8.32" for $118.32.
+        // Each column fades itself in instead (see fadeIn below).
         move: Transition {
             enabled: !root.reducedMotion
             NumberAnimation { property: "x"; duration: root.duration / 2; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.22, 1, 0.36, 1, 1, 1] }
@@ -110,6 +110,8 @@ Item {
                 readonly property int digit: kind === "digit" ? Number(face) : 0
                 width: kind === "digit" ? digitMetrics.advanceWidth : mark.implicitWidth
                 height: root.line
+                NumberAnimation { id: fadeIn; target: cell; property: "opacity"; from: 0; to: 1; duration: root.duration / 3 }
+                Component.onCompleted: if (root.settled && !root.reducedMotion) fadeIn.restart()
                 Text {
                     id: mark
                     visible: cell.kind === "mark"
