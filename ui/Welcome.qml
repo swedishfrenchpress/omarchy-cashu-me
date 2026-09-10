@@ -104,6 +104,7 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.minimumHeight: Style.space(42)
         focusable: true
+        bordered: true
         enabled: !root.busy
         onClicked: root.restoreRequested()
     }

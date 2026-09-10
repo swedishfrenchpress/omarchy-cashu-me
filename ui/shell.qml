@@ -518,8 +518,12 @@ ShellRoot {
         Layout.preferredWidth: 1
         Layout.minimumHeight: Style.space(38)
     }
+    // The kit has one button: bordered at rest, filled on hover, focus and
+    // selection. A "secondary" action differs only in where it sits, never
+    // in chrome, so it never reads as loose text.
     component Secondary: Button {
         focusable: true
+        bordered: true
         opacity: enabled ? 1 : 0.4
         Layout.fillWidth: true
         Layout.preferredWidth: 1
