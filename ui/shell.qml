@@ -143,7 +143,7 @@ ShellRoot {
     }
     onPageChanged: {
         contentScroll.contentItem.contentY = 0
-        if (page !== "backup") backend.recoveryPhrase = ""
+        if (page !== "recovery") backend.recoveryPhrase = ""
         if (page !== "share") { backend.share = {}; app.revealShare = false }
         if (page !== "scan") scanner.running = false
     }
@@ -1145,12 +1145,10 @@ ShellRoot {
                     visible: app.walletVisible && !backend.review && app.page === "backup"
                     Layout.fillWidth: true
                     spacing: Style.space(16)
-                    Label { text: "Backup & recovery"; font.bold: true }
-                    Action { text: "Show recovery phrase"; enabled: backend.unlocked && !backend.busy; Layout.fillWidth: true; onClicked: backend.request("recovery_phrase") }
-                    Label { visible: backend.recoveryPhrase !== ""; text: backend.recoveryPhrase; Layout.fillWidth: true; font.bold: true }
-                    Label { visible: backend.recoveryPhrase !== ""; text: (backend.state.mints || []).map(mint => mint.url).join("\n"); Layout.fillWidth: true }
-                    Label { visible: backend.recoveryPhrase !== ""; text: "Write these words down privately, together with your mint URLs. This view hides after one minute. A phrase does not restore your full history."; opacity: 0.65; Layout.fillWidth: true }
-                    Secondary { visible: backend.recoveryPhrase !== ""; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
+                    Label { text: "Backup & recovery"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Entry { heading: "Recovery phrase"; detail: "The 12 words that restore your wallet"; enabled: backend.unlocked && !backend.busy; onClicked: app.go("recovery") }
+                    Divider {}
+                    Label { text: "ENCRYPTED BACKUP"; opacity: 0.55; font.pixelSize: Style.font.caption }
                     Label { text: "A backup travels, so it is the file most likely to be copied. Several random words make a far stronger passphrase than a short complicated one."; opacity: 0.65; Layout.fillWidth: true }
                     Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup passphrase (12+ characters)"; Layout.fillWidth: true }
                     Ui.TextField { id: backupConfirmation; password: true; placeholderText: "Repeat backup password"; Layout.fillWidth: true }
@@ -1163,6 +1161,95 @@ ShellRoot {
                     Label { text: "Full backup restore is available when setting up a new wallet. It never overwrites an existing wallet."; opacity: 0.65; Layout.fillWidth: true }
                     Divider {}
 
+                }
+                // The recovery phrase takes the whole page, after cashu.me's
+                // Backup Wallet sheet: a warning and a single reveal action
+                // first, then the words as a numbered grid with the mint
+                // URLs a restore also needs. The worker hides the phrase
+                // after one minute; leaving the page hides it at once.
+                ColumnLayout {
+                    id: recoveryPage
+                    readonly property bool revealed: backend.recoveryPhrase !== ""
+                    readonly property var words: backend.recoveryPhrase.trim().split(/\s+/).filter(word => word !== "")
+                    visible: app.walletVisible && !backend.review && app.page === "recovery"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(implicitHeight, contentScroll.availableHeight - header.height - parent.spacing)
+                    spacing: Style.space(16)
+                    Label { text: "Recovery phrase"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
+                    Label {
+                        visible: !recoveryPage.revealed
+                        text: "󰌆"
+                        font.pixelSize: Style.space(44)
+                        opacity: 0.8
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    Label {
+                        visible: !recoveryPage.revealed
+                        text: "Your recovery phrase is the only way to restore your wallet if this computer is lost."
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    Label {
+                        visible: !recoveryPage.revealed
+                        text: "Anyone who sees these words can take your funds. Reveal them only when nobody is watching your screen, write them down on paper, and never share them or store them in a photo or a message."
+                        opacity: 0.65
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
+                    Action {
+                        visible: !recoveryPage.revealed
+                        text: backend.busy ? "Revealing…" : "I understand, reveal my phrase"
+                        enabled: backend.unlocked && !backend.busy
+                        onClicked: backend.request("recovery_phrase")
+                    }
+                    Label { visible: recoveryPage.revealed; text: "Write these words down in order and keep them somewhere safe. Do not share them with anyone."; opacity: 0.65; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    GridLayout {
+                        visible: recoveryPage.revealed
+                        Layout.fillWidth: true
+                        columns: 3
+                        columnSpacing: Style.space(8)
+                        rowSpacing: Style.space(8)
+                        Repeater {
+                            model: recoveryPage.words
+                            delegate: Rectangle {
+                                required property string modelData
+                                required property int index
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                implicitHeight: Style.space(44)
+                                radius: Style.cornerRadius
+                                color: Qt.alpha(Color.foreground, 0.07)
+                                Accessible.role: Accessible.StaticText
+                                Accessible.name: "Word " + (index + 1) + ", " + modelData
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: Style.space(10)
+                                    anchors.rightMargin: Style.space(6)
+                                    spacing: Style.space(6)
+                                    Label { text: (index + 1) + "."; opacity: 0.5; font.pixelSize: Style.font.caption }
+                                    Label { text: modelData; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+                                }
+                            }
+                        }
+                    }
+                    Label { visible: recoveryPage.revealed; text: "MINTS"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                    Label { visible: recoveryPage.revealed; text: "A restore also needs your mint URLs. Keep these with the words."; opacity: 0.65; Layout.fillWidth: true }
+                    Repeater {
+                        model: recoveryPage.revealed ? app.mints : []
+                        delegate: Label { required property var modelData; text: modelData.url; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere }
+                    }
+                    Label { visible: recoveryPage.revealed; text: "A phrase does not restore your full history. This page hides after one minute."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    Item { visible: recoveryPage.revealed; Layout.fillHeight: true }
+                    Action {
+                        visible: recoveryPage.revealed
+                        text: clipboard.running ? "Copied · waiting for paste" : "Copy recovery phrase"
+                        enabled: !clipboard.running
+                        onClicked: { app.clipboardText = backend.recoveryPhrase; clipboard.stdinEnabled = true; clipboard.running = true }
+                    }
+                    Secondary { visible: recoveryPage.revealed; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
                 }
 
                 Divider { visible: app.walletVisible && app.page === "settings" }

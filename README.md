@@ -51,7 +51,7 @@ Without a password, Chaumarchy keeps its database key in a private local file an
 
 ## Backup and restore
 
-Settings exposes the recovery phrase together with your mint URLs; the phrase view hides after one minute. Record both privately. Phrase recovery scans known mints for recoverable unspent ecash; it does not restore full history or every pending operation. There is no BIP39 passphrase field in this version.
+Settings → Backup & recovery → Recovery phrase opens a full page that explains what the words are worth before a single reveal action shows them as a numbered grid together with your mint URLs; the page hides them after one minute or as soon as you leave it. Record both privately. Phrase recovery scans known mints for recoverable unspent ecash; it does not restore full history or every pending operation. There is no BIP39 passphrase field in this version.
 
 Export an encrypted full backup with its own password. The backup includes CDK operation state, recovery data, and mint settings. Export never overwrites a file. Import never overwrites an existing wallet. Stop using the original wallet before restoring a copy. Imported wallets cannot spend until their mints have reconciled the saved state; offline mints are retried.
 
