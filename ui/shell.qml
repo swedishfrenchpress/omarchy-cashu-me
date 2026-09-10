@@ -1362,9 +1362,15 @@ ShellRoot {
                         Layout.preferredHeight: Layout.preferredWidth
                         fillMode: Image.PreserveAspectFit
                         onFramesChanged: frame = 0
-                        Timer { running: shareQr.visible && shareQr.frames.length > 1 && app.page === "share"; interval: 300; repeat: true; onTriggered: shareQr.frame = (shareQr.frame + 1) % shareQr.frames.length }
+                        // The reference's three speeds, cycled by tapping the code.
+                        property int speed: 1
+                        readonly property var speeds: [{name: "fast", interval: 100}, {name: "medium", interval: 300}, {name: "slow", interval: 500}]
+                        Timer { running: shareQr.visible && shareQr.frames.length > 1 && app.page === "share"; interval: shareQr.speeds[shareQr.speed].interval; repeat: true; onTriggered: shareQr.frame = (shareQr.frame + 1) % shareQr.frames.length }
+                        TapHandler { enabled: shareQr.frames.length > 1; onTapped: { shareQr.speed = (shareQr.speed + 1) % shareQr.speeds.length; app.toast("Animation " + shareQr.speeds[shareQr.speed].name) } }
+                        Accessible.role: Accessible.Button
+                        Accessible.name: shareQr.frames.length > 1 ? "Animated QR code, " + shareQr.speeds[shareQr.speed].name + " speed. Tap to change the speed" : "QR code"
                     }
-                    Label { visible: shareQr.frames.length > 1; text: "Animated code · hold the scanner steady"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: shareQr.frames.length > 1; text: "Animated code · " + shareQr.speeds[shareQr.speed].name + " · tap to change speed"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     // Shown in the unit the amount was typed in, with the
                     // other beneath, so a dollar request still reads as one.
                     AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
