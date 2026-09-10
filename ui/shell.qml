@@ -1349,7 +1349,22 @@ ShellRoot {
                     // sit below the fold.
                     spacing: Style.space(app.compact ? 12 : 20)
                     Label { text: backend.share.token ? "Pending ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(app.compact ? 180 : 280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
+                    // A long token animates through its NUT-16 frames at the
+                    // reference's medium speed; anything else is one code.
+                    Image {
+                        id: shareQr
+                        property var frames: backend.share.qr_frames || []
+                        property int frame: 0
+                        source: frames.length > 0 ? frames[frame % frames.length] : (backend.share.qr || "")
+                        visible: source.toString() !== ""
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: Math.min(app.compact ? 180 : 280, contentScroll.availableWidth)
+                        Layout.preferredHeight: Layout.preferredWidth
+                        fillMode: Image.PreserveAspectFit
+                        onFramesChanged: frame = 0
+                        Timer { running: shareQr.visible && shareQr.frames.length > 1 && app.page === "share"; interval: 300; repeat: true; onTriggered: shareQr.frame = (shareQr.frame + 1) % shareQr.frames.length }
+                    }
+                    Label { visible: shareQr.frames.length > 1; text: "Animated code · hold the scanner steady"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     // Shown in the unit the amount was typed in, with the
                     // other beneath, so a dollar request still reads as one.
                     AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }

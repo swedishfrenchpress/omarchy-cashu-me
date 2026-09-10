@@ -69,8 +69,34 @@ impl Drop for Request {
     }
 }
 
-fn emit(mut value: Value) {
+/// The reference wallet's medium chunk size for animated QR frames.
+const ANIMATED_QR_FRAGMENT: usize = 100;
+
+fn qr_data_uri(text: &str) -> Option<String> {
     use base64::Engine;
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(300, 300)
+        .build();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(svg);
+    Some(format!("data:image/svg+xml;base64,{encoded}"))
+}
+
+fn animated_qr_frames(token: &str) -> Option<Vec<Value>> {
+    use std::str::FromStr;
+    let token = cdk::nuts::Token::from_str(token).ok()?;
+    let mut encoder = token.ur_encoder(ANIMATED_QR_FRAGMENT).ok()?;
+    let count = encoder.fragment_count().max(1);
+    let mut frames = Vec::with_capacity(count * 2);
+    for _ in 0..count * 2 {
+        let part = encoder.next_part().ok()?;
+        frames.push(Value::String(qr_data_uri(&part)?));
+    }
+    Some(frames)
+}
+
+fn emit(mut value: Value) {
     // A QR renders for whatever the result asks to share: a token, an
     // invoice, or any text the interface wants shown as a code.
     let share_text = value["result"]["token"]
@@ -78,13 +104,19 @@ fn emit(mut value: Value) {
         .or(value["result"]["invoice"].as_str())
         .or(value["result"]["qr_text"].as_str());
     if let Some(text) = share_text {
-        if let Ok(code) = qrcode::QrCode::new(text.as_bytes()) {
-            let svg = code
-                .render::<qrcode::render::svg::Color>()
-                .min_dimensions(300, 300)
-                .build();
-            let encoded = base64::engine::general_purpose::STANDARD.encode(svg);
-            value["result"]["qr"] = Value::String(format!("data:image/svg+xml;base64,{encoded}"));
+        if let Some(uri) = qr_data_uri(text) {
+            value["result"]["qr"] = Value::String(uri);
+        }
+    }
+    // NUT-16: a token longer than one comfortable frame animates, as in
+    // cashubtc/wallet, through cashu's own fountain encoder. Twice the
+    // fragment count gives a scanner that misses frames enough redundancy.
+    if let Some(token) = value["result"]["token"].as_str() {
+        if token.len() > ANIMATED_QR_FRAGMENT {
+            if let Some(frames) = animated_qr_frames(token) {
+                value["result"]["qr"] = frames[0].clone();
+                value["result"]["qr_frames"] = Value::Array(frames);
+            }
         }
     }
     let stdout = std::io::stdout();

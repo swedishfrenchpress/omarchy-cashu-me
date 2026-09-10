@@ -103,6 +103,9 @@ class WalletIntegration(unittest.TestCase):
                 alice.ok("cancel_payment", review_id=review["review_id"])
                 self.assertEqual(alice.state()["mints"][0]["reserved"], "0")
                 sent = alice.confirm("send_ecash", amount="16")
+                # A token longer than one frame ships NUT-16 animated QR frames.
+                self.assertTrue(sent["qr"].startswith("data:image/svg+xml;base64,"))
+                self.assertGreaterEqual(len(sent.get("qr_frames", [])), 2)
                 received = bob.confirm("receive_token", text=sent["token"])
                 self.assertEqual(received["amount"], "16")
                 duplicate = bob.ok("receive_token", text=sent["token"])
