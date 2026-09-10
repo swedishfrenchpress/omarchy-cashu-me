@@ -124,7 +124,7 @@ QtObject {
             if (message.result && message.result.paid) notice = "Lightning payment completed."
             if (message.result && message.result.received) notice = "Received " + message.result.amount + " sats."
             if (message.result && message.result.reclaimed) notice = "Reclaimed " + message.result.amount + " sats."
-            if (message.result && message.result.cancelled) notice = "Payment cancelled."
+            if (message.result && message.result.cancelled) notice = "Payment cancelled"
             if (message.result && message.result.phrase) {
                 recoveryPhrase = message.result.phrase
                 phraseTimer.restart()
@@ -135,10 +135,7 @@ QtObject {
             }
             if (message.result && message.result.recovered !== undefined) restored(message.result)
             if (message.result && message.result.qr_text) { qrView = message.result; qrReady(message.result) }
-            if (message.result && message.result.security_updated) notice = "Security settings updated."
-            if (message.result && message.result.display_updated) notice = "Display settings updated."
-            if (message.result && message.result.mint_added) { notice = "Mint added."; mintAdded() }
-            if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
+            if (message.result && message.result.mint_added) { notice = "Mint added"; mintAdded() }
             if (message.event === "fatal") ready = false
             if (finished !== "") succeeded(finished)
             if (refused !== "") failed(refused)

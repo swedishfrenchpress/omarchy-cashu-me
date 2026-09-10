@@ -100,6 +100,11 @@ ShellRoot {
     // iOS system green, the light and dark variants, chosen by the theme's
     // background. Omarchy themes have no green token of their own.
     readonly property color received: Color.background.hslLightness < 0.5 ? "#30D158" : "#34C759"
+    // iOS system red for destructive rows, chosen the same way.
+    readonly property color destructive: Color.background.hslLightness < 0.5 ? "#FF453A" : "#FF3B30"
+    // One ephemeral toast at the top centre, like the reference's
+    // ConfirmationToast: 2.2 s, then gone. Errors stay inline.
+    function toast(message) { toastHost.message = message; toastHost.shown = true; toastTimer.restart() }
     // The worker identifies a mint by URL; people know it by name.
     function mintName(url) {
         var mint = app.mints.find(mint => mint.url === url)
@@ -152,7 +157,7 @@ ShellRoot {
         if (page !== "recovery") revealPassword.clear()
         if (page !== "app_lock") appLockMode = ""
         if (page !== "advanced_keys") { importingKey = false; importKeyText = "" }
-        if (page === "receive_token" && app.privacy.auto_paste !== false && app.receiveText === "") { pasteTarget = "token"; pasteProbe.running = false; pasteProbe.running = true }
+        if (page === "receive" && app.privacy.auto_paste !== false && app.receiveText === "") { pasteTarget = "token"; pasteProbe.explicit = false; pasteProbe.running = false; pasteProbe.running = true }
         if (page !== "share") { backend.share = {}; app.revealShare = false }
         if (page !== "scan") scanner.running = false
     }
@@ -226,7 +231,7 @@ ShellRoot {
         return app.mints.length ? app.mints[(index + 1) % app.mints.length].url : ""
     }
     function showQr(title, text) { app.qrTitle = title; backend.request("make_qr", {text: text}) }
-    function copyText(text) { app.clipboardText = text; clipboard.stdinEnabled = true; clipboard.running = true }
+    function copyText(text, what) { app.clipboardText = text; clipboard.stdinEnabled = true; clipboard.running = true; if (what) app.toast("Copied " + what) }
     function shortKey(key) { return key && key.length > 20 ? key.slice(0, 10) + "…" + key.slice(-8) : (key || "") }
     function ago(seconds) {
         if (!seconds) return ""
@@ -285,7 +290,7 @@ ShellRoot {
         app.restoreRunNext()
     }
     function finishRestore() { app.restoreMode = false; app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {} }
-    function pasteInto(target) { pasteTarget = target; pasteProbe.running = false; pasteProbe.running = true }
+    function pasteInto(target) { pasteTarget = target; pasteProbe.explicit = true; pasteProbe.running = false; pasteProbe.running = true }
     property string pasteTarget: ""
     property bool automaticOpenAttempted: false
     property string receiveText: ""
@@ -325,6 +330,7 @@ ShellRoot {
         onReadyChanged: app.maybeOpen()
         onStateChanged: app.maybeOpen()
         onErrorChanged: if (backend.error) contentScroll.contentItem.contentY = 0
+        onNoticeChanged: if (backend.notice) { app.toast(backend.notice); backend.notice = "" }
         // Clearing a submitted secret waits for the worker to accept it: a
         // rejected recovery phrase used to be wiped, forcing the user to retype
         // every word from paper.
@@ -415,7 +421,7 @@ ShellRoot {
                         if (app.scanTarget === "mint") {
                             app.mintUrl = result.text.trim(); app.page = "add_mint"
                         } else if (result.text.trim().startsWith("cashu")) {
-                            app.receiveText = result.text; app.page = "receive_token"
+                            app.receiveText = result.text; app.page = "receive"
                         } else { app.paymentText = result.text; app.page = "send" }
                     }
                 } catch (_) { backend.error = "Could not decode the scanned result." }
@@ -445,13 +451,17 @@ ShellRoot {
         id: pasteProbe
         command: ["wl-paste", "--no-newline", "--type", "text/plain"]
         property string collected: ""
+        // Set by a Paste button, so a bad clipboard gets a toast; the
+        // automatic paste on opening the receive page stays silent.
+        property bool explicit: false
         onStarted: collected = ""
         stdout: SplitParser { onRead: data => pasteProbe.collected += data + " " }
         stderr: SplitParser { onRead: data => {} }
         onExited: (code, status) => {
             var text = pasteProbe.collected.trim()
             if (code !== 0) return
-            if (app.pasteTarget === "token") { if (text.startsWith("cashu") && app.receiveText === "") app.receiveText = text }
+            if (app.pasteTarget === "token") { if (text.startsWith("cashu")) app.receiveText = text; else if (text !== "" && pasteProbe.explicit) app.toast("That doesn't look like a Cashu token") }
+            else if (app.pasteTarget === "invoice") { if (text !== "") app.paymentText = text.replace(/^lightning:/i, "") }
             else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
             else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
             app.pasteTarget = ""
@@ -606,6 +616,49 @@ ShellRoot {
         tooltipText: Accessible.name
         opacity: enabled ? 1 : 0.4
     }
+    component SquareIcon: IconButton {
+        bordered: true
+        implicitWidth: implicitHeight
+        tooltipText: ""
+    }
+    // A key in groups of four, alternating weight, left-aligned, cut with an
+    // ellipsis where the row runs out of room.
+    component KeyText: Item {
+        id: keyText
+        property string key: ""
+        property real size: Style.font.body
+        readonly property var groups: key.match(/.{1,4}/g) || []
+        readonly property int fit: Math.max(1, Math.floor((width - groupMetrics.advanceWidth) / groupMetrics.advanceWidth))
+        readonly property bool truncated: groups.length > fit
+        implicitHeight: keyRow.implicitHeight
+        Layout.fillWidth: true
+        Accessible.role: Accessible.StaticText
+        Accessible.name: key
+        TextMetrics { id: groupMetrics; font.family: Style.font.family; font.pixelSize: keyText.size; text: "0000 " }
+        Row {
+            id: keyRow
+            spacing: 0
+            Repeater {
+                model: keyText.truncated ? keyText.groups.slice(0, keyText.fit) : keyText.groups
+                delegate: Label { required property string modelData; required property int index; text: modelData + " "; opacity: index % 2 === 0 ? 1 : 0.5; font.pixelSize: keyText.size }
+            }
+            Label { visible: keyText.truncated; text: "…"; opacity: 0.5; font.pixelSize: keyText.size }
+        }
+    }
+    // A text field with a paste button at its end, as the reference's
+    // inputs carry a Paste action.
+    component PasteField: RowLayout {
+        id: pasteField
+        property alias placeholderText: pasteInput.placeholderText
+        property alias text: pasteInput.text
+        property string target: ""
+        signal edited(string text)
+        signal accepted()
+        Layout.fillWidth: true
+        spacing: Style.space(8)
+        Ui.TextField { id: pasteInput; Layout.fillWidth: true; onTextEdited: pasteField.edited(text); onAccepted: pasteField.accepted() }
+        SquareIcon { iconText: "󰅍"; Accessible.name: "Paste from clipboard"; Layout.preferredHeight: pasteInput.implicitHeight; onClicked: app.pasteInto(pasteField.target) }
+    }
     component Caption: Label { opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1; Layout.topMargin: Style.space(6) }
     component Footer: Label { opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
     // A row whose whole surface flips a setting, with the kit's own switch
@@ -675,11 +728,11 @@ ShellRoot {
                     Label { visible: keyCard.status !== ""; text: keyCard.status; color: keyCard.statusColor; opacity: keyCard.statusColor === Color.foreground ? 0.6 : 0.9; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
                 }
             }
-            Secondary {
-                text: clipboard.running ? "Copied · waiting for paste" : app.shortKey(keyCard.pubkey) + "   󰆏"
-                Accessible.name: "Copy this key"
-                enabled: keyCard.pubkey !== "" && !clipboard.running
-                onClicked: app.copyText(keyCard.pubkey)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(10)
+                KeyText { key: keyCard.pubkey }
+                SquareIcon { iconText: "󰆏"; Accessible.name: "Copy this key"; enabled: keyCard.pubkey !== ""; onClicked: app.copyText(keyCard.pubkey, "key") }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -720,12 +773,12 @@ ShellRoot {
             anchors.fill: parent
             anchors.margins: Style.space(12)
             spacing: Style.space(16)
-            Label { visible: entry.icon !== ""; text: entry.icon; color: entry.destructive ? Color.urgent : entry.iconColor; font.pixelSize: Style.font.heading; opacity: entry.destructive || entry.iconColor !== Color.foreground ? 1 : 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignVCenter }
+            Label { visible: entry.icon !== ""; text: entry.icon; color: entry.destructive ? app.destructive : entry.iconColor; font.pixelSize: Style.font.heading; opacity: entry.destructive || entry.iconColor !== Color.foreground ? 1 : 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignVCenter }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 spacing: Style.space(5)
-                Label { text: entry.heading; color: entry.destructive ? Color.urgent : Color.foreground; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle; wrapMode: Text.NoWrap }
+                Label { text: entry.heading; color: entry.destructive ? app.destructive : Color.foreground; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle; wrapMode: Text.NoWrap }
                 Label { visible: entry.detail !== ""; text: entry.detail; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
             }
             Label { text: entry.trailing; font.pixelSize: Style.font.body; Layout.alignment: Qt.AlignVCenter }
@@ -974,7 +1027,6 @@ ShellRoot {
                     Action { visible: app.restoreStep === "progress"; text: "Continue"; enabled: restorePage.allSettled && !backend.busy; onClicked: app.finishRestore() }
                 }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
-                Label { visible: backend.notice !== "" && app.page !== "complete"; text: backend.notice; Layout.fillWidth: true }
                 Label { visible: scanner.running; text: "Scanning… Hold one QR code steady. Scanning stops after one minute."; Layout.fillWidth: true; opacity: 0.65 }
                 Secondary { visible: scanner.running; text: "Cancel scan"; onClicked: scanner.running = false }
 
@@ -1104,20 +1156,21 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Send"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Ui.TextField { id: invoiceInput; Layout.fillWidth: true; placeholderText: "Paste a Lightning invoice"; text: app.paymentText; onTextEdited: app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
+                    PasteField { placeholderText: "Address, invoice, or Cashu Request"; target: "invoice"; text: app.paymentText; onEdited: text => app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
                     Action { id: invoiceReview; visible: app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
-                    Entry { heading: "Scan a payment"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
-                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.entryText = ""; app.lockTo = ""; app.lockToOpen = false; app.go("send_amount") } }
-                    Entry { visible: !backend.state.selected; heading: "Choose a mint first"; onClicked: app.go("mints") }
+                    Entry { icon: "󰐲"; heading: "Scan"; detail: "Scan an invoice, address, or request"; onClicked: app.go("scan") }
+                    Entry { id: ecashChoice; icon: "󰄔"; heading: "Ecash"; detail: "Create a token to share with someone"; onClicked: { app.entryText = ""; app.lockTo = ""; app.lockToOpen = false; app.go("send_amount") } }
+                    Entry { visible: !backend.state.selected; icon: "󰭎"; heading: "Choose a mint first"; onClicked: app.go("mints") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "receive"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Receive"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Entry { id: lightningChoice; heading: "Lightning"; detail: "Create an invoice to receive from another wallet."; onClicked: { app.entryText = ""; app.go("receive_amount") } }
-                    Entry { heading: "Ecash"; detail: "Redeem a Cashu token someone sent you."; onClicked: { app.receiveText = ""; app.go("receive_token") } }
-                    Entry { heading: "Scan a token"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
+                    PasteField { placeholderText: "Paste a Cashu token"; target: "token"; text: app.receiveText; onEdited: text => app.receiveText = text; onAccepted: if (receiveReview.enabled) receiveReview.clicked() }
+                    Action { id: receiveReview; visible: app.receiveText.trim() !== ""; text: backend.busy ? "Preparing…" : "Receive"; enabled: backend.unlocked && !backend.busy; onClicked: backend.request("receive_token", {text: app.receiveText}) }
+                    Entry { icon: "󰐲"; heading: "Scan"; detail: "Scan an ecash token"; onClicked: app.go("scan") }
+                    Entry { id: lightningChoice; icon: "󱐋"; heading: "Lightning"; detail: "Create an invoice to receive from another wallet"; onClicked: { app.entryText = ""; app.go("receive_amount") } }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && (app.page === "send_amount" || app.page === "receive_amount")
@@ -1209,16 +1262,6 @@ ShellRoot {
                     }
                 }
                 ColumnLayout {
-                    visible: app.walletVisible && !backend.review && app.page === "receive_token"
-                    Layout.fillWidth: true
-                    spacing: Style.space(22)
-                    Label { text: "Receive ecash"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Ui.TextField { Layout.fillWidth: true; placeholderText: "Paste a Cashu token"; text: app.receiveText; onTextEdited: app.receiveText = text }
-                    Label { text: "The token is redeemed with its issuing mint. Add an unfamiliar mint before receiving its ecash."; Layout.fillWidth: true; opacity: 0.6 }
-                    Action { text: backend.busy ? "Preparing…" : "Review token"; Layout.fillWidth: true; enabled: backend.unlocked && !backend.busy && app.receiveText.trim() !== ""; onClicked: backend.request("receive_token", {text: app.receiveText}) }
-                    Secondary { text: "Scan instead"; onClicked: app.go("scan") }
-                }
-                ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "scan"
                     Layout.fillWidth: true
                     spacing: Style.space(22)
@@ -1241,10 +1284,10 @@ ShellRoot {
                     Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
-                        text: clipboard.running ? "Copied · waiting for paste" : backend.share.token ? "Copy token" : "Copy invoice"
+                        text: backend.share.token ? "Copy token" : "Copy invoice"
                         enabled: !clipboard.running
                         Layout.fillWidth: true
-                        onClicked: { app.clipboardText = backend.share.token || backend.share.invoice || ""; clipboard.stdinEnabled = true; clipboard.running = true }
+                        onClicked: app.copyText(backend.share.token || backend.share.invoice || "", backend.share.token ? "ecash token" : "invoice")
                     }
                     DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
                     DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
@@ -1410,14 +1453,11 @@ ShellRoot {
                     readonly property var words: backend.recoveryPhrase.trim().split(/\s+/).filter(word => word !== "")
                     visible: app.walletVisible && !backend.review && app.page === "recovery"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: app.pinnedHeight(implicitHeight)
                     spacing: Style.space(16)
                     Label { text: "Backup Wallet"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
-                    Label { visible: !recoveryPage.revealed; text: "󰌆"; font.pixelSize: Style.space(44); opacity: 0.8; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: !recoveryPage.revealed; text: "󰌆"; font.pixelSize: Style.space(44); opacity: 0.8; Layout.fillWidth: true; Layout.topMargin: Style.space(12); horizontalAlignment: Text.AlignHCenter }
                     Label { visible: !recoveryPage.revealed; text: "Your recovery phrase is the only way to restore your wallet. Keep it private and stored somewhere safe. Never share it with anyone."; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: !recoveryPage.revealed; text: "Anyone who sees these words can take your funds. Reveal them only when nobody is watching your screen, and write them down on paper rather than in a photo or a message."; opacity: 0.65; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
                     Ui.TextField { id: revealPassword; visible: !recoveryPage.revealed && backend.state.password_required === true; password: true; placeholderText: "Wallet password"; Layout.fillWidth: true; onAccepted: if (revealButton.enabled) revealButton.clicked() }
                     Action {
                         id: revealButton
@@ -1463,12 +1503,11 @@ ShellRoot {
                         delegate: Label { required property var modelData; text: modelData.url; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere }
                     }
                     Label { visible: recoveryPage.revealed; text: "A phrase does not restore your full history. This page hides after one minute."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
-                    Item { visible: recoveryPage.revealed; Layout.fillHeight: true }
                     Action {
                         visible: recoveryPage.revealed
-                        text: clipboard.running ? "Copied · waiting for paste" : "Copy Recovery Phrase"
+                        text: "Copy Recovery Phrase"
                         enabled: !clipboard.running
-                        onClicked: app.copyText(backend.recoveryPhrase)
+                        onClicked: app.copyText(backend.recoveryPhrase, "recovery phrase")
                     }
                     Secondary { visible: recoveryPage.revealed; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
                 }
@@ -1524,16 +1563,28 @@ ShellRoot {
                         busy: backend.busy && backend.pendingMethod === "set_lightning"
                         onToggled: app.setLightning({enabled: !app.lightning.enabled})
                     }
-                    Entry {
+                    RowLayout {
                         visible: app.lightning.enabled === true && !!app.lightning.address
-                        icon: app.lightning.status === "error" ? "󰅙" : app.lightning.status === "connected" ? "󰄬" : "󰔟"
-                        iconColor: app.lightning.status === "error" ? Color.urgent : app.lightning.status === "connected" ? app.received : Color.foreground
-                        heading: app.lightning.address || ""
-                        detail: app.lightning.status === "error" ? "Needs attention" : app.lightning.status === "connected" ? "Connected" : "Connecting"
-                        trailing: "󰐲"
-                        onClicked: app.showQr("Lightning Address", app.lightning.address)
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Style.space(12)
+                        spacing: Style.space(12)
+                        Label {
+                            text: app.lightning.status === "error" ? "󰅙" : app.lightning.status === "connected" ? "󰄬" : "󰔟"
+                            color: app.lightning.status === "error" ? app.destructive : app.lightning.status === "connected" ? app.received : Color.foreground
+                            font.pixelSize: Style.font.heading
+                            Layout.preferredWidth: Style.space(28)
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            spacing: Style.space(4)
+                            Label { text: app.lightning.address || ""; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle; wrapMode: Text.NoWrap }
+                            Label { text: app.lightning.status === "error" ? "Needs attention" : app.lightning.status === "connected" ? "Connected" : "Connecting"; opacity: 0.6; font.pixelSize: Style.font.caption }
+                        }
+                        SquareIcon { iconText: "󰆏"; Accessible.name: "Copy address"; onClicked: app.copyText(app.lightning.address, "Lightning address") }
+                        SquareIcon { iconText: "󰐲"; Accessible.name: "Show QR code"; enabled: !backend.busy; onClicked: app.showQr("Lightning Address", app.lightning.address) }
                     }
-                    Secondary { visible: app.lightning.enabled === true && !!app.lightning.address; text: clipboard.running ? "Copied · waiting for paste" : "Copy address"; enabled: !clipboard.running; onClicked: app.copyText(app.lightning.address) }
                     Footer { visible: app.lightning.enabled !== true; text: app.mints.length > 0 ? "Receive Lightning payments to your wallet using a Lightning address." : "Add a mint first to use a Lightning address." }
                     Label { visible: app.lightning.status === "error"; text: app.lightning.error || "Wallet not fully initialized. Try setup again to finish your Lightning address."; color: Color.urgent; Layout.fillWidth: true }
                     Action { visible: app.lightning.status === "error"; text: backend.busy ? "Setting up…" : "Try setup again"; enabled: !backend.busy; onClicked: app.setLightning({}) }
@@ -1605,7 +1656,6 @@ ShellRoot {
                             Label { text: modelData.text; Layout.fillWidth: true }
                         }
                     }
-                    Action { text: "Got it"; onClicked: app.back() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "advanced_keys"
@@ -1639,7 +1689,7 @@ ShellRoot {
                     KeyCard {
                         title: app.deviceKey.nickname || "Device key"
                         status: "On this device only — not in your seed backup"
-                        statusColor: Color.urgent
+                        statusColor: app.destructive
                         pubkey: app.deviceKey.pubkey || ""
                         revealLabel: "Back up key"
                         onShowQr: app.showQr("Key", app.deviceKey.pubkey)
@@ -1682,7 +1732,7 @@ ShellRoot {
                         color: Qt.alpha(Color.foreground, 0.07)
                         Label { id: revealedText; anchors.fill: parent; anchors.margins: Style.space(12); text: backend.revealedKey; font.pixelSize: Style.font.caption; wrapMode: Text.WrapAnywhere; Accessible.name: "Private key, " + backend.revealedKey }
                     }
-                    Action { visible: revealPage.revealed; text: clipboard.running ? "Copied · waiting for paste" : "Copy Private Key"; enabled: !clipboard.running; onClicked: app.copyText(backend.revealedKey) }
+                    Action { visible: revealPage.revealed; text: "Copy Private Key"; enabled: !clipboard.running; onClicked: app.copyText(backend.revealedKey, "private key") }
                     Secondary { visible: revealPage.revealed; text: "Hide key"; onClicked: backend.revealedKey = "" }
                     Footer { visible: revealPage.revealed; text: "This page hides the key after one minute." }
                 }
@@ -1694,7 +1744,7 @@ ShellRoot {
                     Label { text: app.qrTitle; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Image { source: backend.qrView.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(app.compact ? 220 : 280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
                     Label { text: backend.qrView.qr_text || ""; font.pixelSize: Style.font.caption; opacity: 0.8; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; horizontalAlignment: Text.AlignHCenter }
-                    Action { text: clipboard.running ? "Copied · waiting for paste" : "Copy"; enabled: !clipboard.running; onClicked: app.copyText(backend.qrView.qr_text || "") }
+                    Action { text: "Copy"; enabled: !clipboard.running; onClicked: app.copyText(backend.qrView.qr_text || "", app.qrTitle.toLowerCase()) }
                     Secondary { text: "Done"; onClicked: app.back() }
                 }
                 // ---- Privacy
@@ -1744,6 +1794,33 @@ ShellRoot {
             confirmText: "Replace"
             onCanceled: opened = false
             onConfirmed: { opened = false; app.restoreReplacing = true; backend.request("delete_wallet") }
+        }
+        Item {
+            id: toastHost
+            property string message: ""
+            property bool shown: false
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: toastCard.width
+            height: toastCard.height + Style.space(14)
+            z: 20
+            Rectangle {
+                id: toastCard
+                y: toastHost.shown ? Style.space(14) : -height
+                opacity: toastHost.shown ? 1 : 0
+                width: toastLabel.implicitWidth + Style.space(36)
+                height: toastLabel.implicitHeight + Style.space(20)
+                radius: Style.cornerRadius
+                color: Color.popups.background
+                border.width: 1
+                border.color: Color.popups.border
+                Behavior on y { enabled: !motion.reduced; NumberAnimation { duration: 200; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.22, 1, 0.36, 1, 1, 1] } }
+                Behavior on opacity { enabled: !motion.reduced; NumberAnimation { duration: 140 } }
+                Label { id: toastLabel; anchors.centerIn: parent; text: toastHost.message; font.bold: true; color: Color.popups.text; wrapMode: Text.NoWrap }
+                Accessible.role: Accessible.Notification
+                Accessible.name: toastHost.message
+            }
+            Timer { id: toastTimer; interval: 2200; onTriggered: toastHost.shown = false }
         }
         Ui.ConfirmDialog {
             id: removeKeyDialog
