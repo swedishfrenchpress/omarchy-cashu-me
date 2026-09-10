@@ -394,7 +394,7 @@ ShellRoot {
         Layout.fillWidth: true
         Layout.preferredWidth: 1
     }
-    // One payment in a list: a circled arrow, the type over the time, and the
+    // One payment in a list: an arrow on a square tile, the type over the time, and the
     // amount in the primary unit over its conversion. Incoming amounts are
     // green; nothing in the row is bold.
     component ActivityRow: Button {
@@ -416,7 +416,9 @@ ShellRoot {
             Rectangle {
                 Layout.preferredWidth: Style.space(36)
                 Layout.preferredHeight: Style.space(36)
-                radius: width / 2
+                // Omarchy's own corner radius, so the tile matches the
+                // buttons around it rather than reading as an iOS circle.
+                radius: Style.cornerRadius
                 color: Qt.alpha(Color.foreground, 0.12)
                 Text {
                     anchors.centerIn: parent
@@ -601,11 +603,12 @@ ShellRoot {
                     id: header
                     Layout.fillWidth: true
                     spacing: Style.space(6)
+                    // No wordmark, as in cashubtc/wallet: the back arrow on the
+                    // left, Scan, Settings and the expand control on the right.
                     // Back/Scan/Settings stay in the layout at a constant width
                     // whenever the wallet is visible, and only fade in or out of
                     // relevance per page. Toggling `visible` instead removed
-                    // this icon's width from the row, which shifted the
-                    // CASHU.ME wordmark sideways every time you navigated.
+                    // this icon's width from the row and shifted its neighbours.
                     IconButton {
                         visible: app.walletVisible
                         enabled: !app.mainPage && !backend.review && !backend.busy
@@ -616,7 +619,7 @@ ShellRoot {
                         Accessible.name: "Back"
                         onClicked: app.back()
                     }
-                    Label { text: "CASHU.ME"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
+                    Item { Layout.fillWidth: true }
                     IconButton {
                         visible: app.walletVisible
                         enabled: app.mainPage && !backend.busy
