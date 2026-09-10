@@ -22,7 +22,9 @@ plugin = config / "plugins/cashu-me.wallet"
 # entry and its marked plugin folder. Anything unmarked is left alone.
 legacy_marker = "# Managed by Chaumarchy install-desktop\n"
 legacy_launcher = Path.home() / ".local/bin/chaumarchy"
-if legacy_launcher.is_symlink() and str(legacy_launcher.resolve()).startswith(str(project)):
+# The checkout was usually renamed along with the app, so the old link
+# dangles; recognise it by where it pointed rather than by resolving it.
+if legacy_launcher.is_symlink() and os.readlink(legacy_launcher).endswith("/bin/chaumarchy"):
     legacy_launcher.unlink()
 legacy_entry = applications / "chaumarchy.desktop"
 if legacy_entry.is_file() and legacy_entry.read_text().startswith(legacy_marker):
