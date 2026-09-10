@@ -468,6 +468,7 @@ ShellRoot {
             if (app.pasteTarget === "token") { if (text.startsWith("cashu")) app.receiveText = text; else if (text !== "" && pasteProbe.explicit) app.toast("That doesn't look like a Cashu token") }
             else if (app.pasteTarget === "invoice") { if (text !== "") app.paymentText = text.replace(/^lightning:/i, "") }
             else if (app.pasteTarget === "mint") { if (text !== "") app.mintUrl = text.split(/\s+/)[0] }
+            else if (app.pasteTarget === "lock") { if (text !== "") app.lockTo = text.split(/\s+/)[0] }
             else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
             else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
             app.pasteTarget = ""
@@ -668,6 +669,29 @@ ShellRoot {
         spacing: Style.space(8)
         Ui.TextField { id: pasteInput; Layout.fillWidth: true; onTextEdited: pasteField.edited(text); onAccepted: pasteField.accepted() }
         SquareIcon { iconText: "󰅍"; Accessible.name: "Paste from clipboard"; Layout.preferredHeight: pasteInput.implicitHeight; onClicked: app.pasteInto(pasteField.target) }
+    }
+    // The reference's NativeEmptyState: an icon over a title over a line
+    // of copy, centred, with an optional action. "full" is the screen-sized
+    // form (icon 56, title2), "section" the in-list one (icon 42, headline).
+    component EmptyState: ColumnLayout {
+        id: emptyState
+        property string icon: ""
+        property string title: ""
+        property string description: ""
+        property string actionTitle: ""
+        property bool section: false
+        signal action()
+        Layout.fillWidth: true
+        Layout.preferredHeight: section ? implicitHeight + Style.space(64) : Math.max(implicitHeight, Style.space(300))
+        spacing: 0
+        Accessible.role: Accessible.StaticText
+        Accessible.name: title + ". " + description
+        Item { Layout.fillHeight: true }
+        Label { text: emptyState.icon; font.pixelSize: Style.space(emptyState.section ? 42 : 56); opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        Label { text: emptyState.title; font.bold: true; font.pixelSize: emptyState.section ? Style.font.title : Style.font.heading; Layout.fillWidth: true; Layout.topMargin: Style.space(emptyState.section ? 10 : 12); horizontalAlignment: Text.AlignHCenter }
+        Label { visible: emptyState.description !== ""; text: emptyState.description; opacity: 0.6; font.pixelSize: emptyState.section ? Style.font.bodySmall : Style.font.body; Layout.fillWidth: true; Layout.topMargin: Style.space(4); horizontalAlignment: Text.AlignHCenter }
+        Action { visible: emptyState.actionTitle !== ""; text: emptyState.actionTitle; Layout.topMargin: Style.space(emptyState.section ? 10 : 12); Layout.fillWidth: false; Layout.preferredWidth: Style.space(160); Layout.alignment: Qt.AlignHCenter; onClicked: emptyState.action() }
+        Item { Layout.fillHeight: true }
     }
     component Caption: Label { opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1; Layout.topMargin: Style.space(6) }
     component Footer: Label { opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
@@ -908,6 +932,16 @@ ShellRoot {
                         Accessible.name: "Scan a QR code"
                         onClicked: app.go("scan")
                     }
+                    // Locked Ecash on the amount page: a lock beside the expand
+                    // control, lit while a key is set, opening the key field.
+                    IconButton {
+                        visible: app.walletVisible && app.page === "send_amount"
+                        iconText: app.lockTo !== "" ? "󰌾" : "󰍁"
+                        selected: app.lockTo !== ""
+                        Accessible.name: app.lockTo !== "" ? "Locked to a key. Change or remove the lock" : "Lock this ecash to a key"
+                        enabled: !backend.busy
+                        onClicked: { app.lockToOpen = !app.lockToOpen; if (!app.lockToOpen) amountInput.forceActiveFocus() }
+                    }
                     IconButton {
                         iconText: app.compact ? "󰁜" : "󰁃"
                         Accessible.name: app.compact ? "Expand to window" : "Return to panel"
@@ -1096,16 +1130,19 @@ ShellRoot {
                         Action { text: "Receive"; onClicked: app.go("receive") }
                         Action { text: "Send"; onClicked: app.go("send") }
                     }
-                    Entry { visible: !(backend.state.mints || []).length; heading: "Choose your first mint"; detail: "A mint issues and redeems your ecash."; onClicked: app.go("add_mint") }
                     Entry { visible: app.totalPending > 0 || app.totalReserved > 0; heading: "Pending activity"; detail: app.amountLabel(app.totalPending) + " pending · " + app.amountLabel(app.totalReserved) + " reserved"; onClicked: app.tab("history") }
-                    Divider {}
-                    Label { text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
-                    Label { visible: !(backend.state.history || []).length; text: "No payments yet"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    // The reference drops the RECENT header when there is
+                    // nothing to label and centres its empty state instead.
+                    readonly property bool hasHistory: (backend.state.history || []).length > 0
+                    EmptyState { visible: app.mints.length === 0; icon: "󰁰"; title: "Add a mint to get started"; description: "Mints custody your ecash. Add one to begin."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
+                    EmptyState { visible: app.mints.length > 0 && !parent.hasHistory; icon: "󰋻"; title: "No Activity Yet"; description: "Your recent payments will show up here." }
+                    Divider { visible: parent.hasHistory }
+                    Label { visible: parent.hasHistory; text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
                     Repeater {
                         model: (backend.state.history || []).slice(0, 3)
                         delegate: ActivityRow {}
                     }
-                    Secondary { text: "View all activity  ›"; onClicked: app.tab("history") }
+                    Secondary { visible: parent.hasHistory; text: "View all activity  ›"; onClicked: app.tab("history") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "history"
@@ -1123,7 +1160,9 @@ ShellRoot {
                             delegate: Tab { required property var modelData; text: modelData.name; selected: app.historyFilter === modelData.id; onClicked: app.historyFilter = modelData.id }
                         }
                     }
-                    Label { visible: !app.activity.length; text: "No matching activity"; opacity: 0.6 }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() !== ""; icon: "󰍉"; title: "No Results"; description: "No activity matches “" + app.historySearch.trim() + "”." }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter !== "all"; icon: "󰈲"; title: "Nothing Here"; description: "No transactions match this filter." }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter === "all"; icon: "󰋚"; title: "No Activity Yet"; description: "Your first payment will show up here." }
                     Repeater {
                         model: app.activity
                         delegate: ActivityRow {}
@@ -1164,14 +1203,15 @@ ShellRoot {
                     Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     // The reference's result mark: a filled tile with a check for
                     // a settled payment, a clock while pending, a cross when failed.
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter
+                    Label {
+                        text: parent.settled ? "󰄬" : parent.failed ? "󰅖" : "󰔟"
+                        color: parent.failed ? app.destructive : Color.foreground
+                        opacity: parent.settled || parent.failed ? 1 : 0.6
+                        font.pixelSize: Style.space(48)
+                        font.bold: true
+                        Layout.fillWidth: true
                         Layout.topMargin: Style.space(8)
-                        width: Style.space(72)
-                        height: width
-                        radius: Style.cornerRadius
-                        color: parent.settled ? app.received : parent.failed ? app.destructive : Qt.alpha(Color.foreground, 0.12)
-                        Label { anchors.centerIn: parent; text: parent.parent.settled ? "󰄬" : parent.parent.failed ? "󰅖" : "󰔟"; color: parent.parent.settled || parent.parent.failed ? Color.background : Color.foreground; font.pixelSize: Style.space(36); font.bold: true }
+                        horizontalAlignment: Text.AlignHCenter
                     }
                     AmountDisplay { amount: app.transaction.amount; emphasized: true; animated: false }
                     DetailRow { heading: "Status"; value: parent.settled ? (app.transaction.kind === "Lightning" ? "Paid" : "Completed") : parent.failed ? "Failed" : "Pending" }
@@ -1266,20 +1306,24 @@ ShellRoot {
                     // Locked Ecash: lock this token to a key. The quick shortcut
                     // fills in the wallet's own key, as the reference's send
                     // drawer does when "Quick lock to my key" is on.
-                    RowLayout {
-                        visible: app.page === "send_amount"
-                        Layout.fillWidth: true
-                        spacing: Style.space(12)
-                        Tab { visible: app.locked.quick_lock === true && !!app.locked.seed_key; text: "󰌾  Lock to my key"; selected: app.lockTo !== "" && app.lockTo === app.locked.seed_key; onClicked: { app.lockTo = app.lockTo === app.locked.seed_key ? "" : app.locked.seed_key; app.lockToOpen = false; amountInput.forceActiveFocus() } }
-                        Tab { text: app.lockTo !== "" && app.lockTo !== app.locked.seed_key ? "󰌾  Locked to " + app.shortKey(app.lockTo) : "󰌾  Lock to a key"; selected: app.lockToOpen; onClicked: { app.lockToOpen = !app.lockToOpen; if (!app.lockToOpen) amountInput.forceActiveFocus() } }
+                    // Opened from the header's lock: the recipient's key, with the
+                    // "Lock to my key" shortcut when Quick lock is on. A set lock
+                    // shows as a caption under the amount.
+                    Label { visible: app.page === "send_amount" && app.lockTo !== "" && !app.lockToOpen; text: "󰌾  Locked to " + (app.lockTo === app.locked.seed_key ? "your key" : app.shortKey(app.lockTo)); opacity: 0.6; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    PasteField {
+                        visible: app.page === "send_amount" && app.lockToOpen
+                        placeholderText: "Recipient's public key (02… hex)"
+                        target: "lock"
+                        text: app.lockTo === app.locked.seed_key ? "" : app.lockTo
+                        onEdited: text => app.lockTo = text.trim()
+                        onAccepted: { app.lockToOpen = false; amountInput.forceActiveFocus() }
                     }
-                    Ui.TextField {
+                    RowLayout {
                         visible: app.page === "send_amount" && app.lockToOpen
                         Layout.fillWidth: true
-                        placeholderText: "Recipient's public key (02… hex)"
-                        text: app.lockTo === app.locked.seed_key ? "" : app.lockTo
-                        onTextEdited: app.lockTo = text.trim()
-                        onAccepted: { app.lockToOpen = false; amountInput.forceActiveFocus() }
+                        spacing: Style.space(12)
+                        Tab { visible: app.locked.quick_lock === true && !!app.locked.seed_key; text: "Lock to my key"; selected: app.lockTo === app.locked.seed_key; onClicked: { app.lockTo = app.locked.seed_key; app.lockToOpen = false; amountInput.forceActiveFocus() } }
+                        Tab { text: app.lockTo !== "" ? "Remove lock" : "Cancel"; onClicked: { app.lockTo = ""; app.lockToOpen = false; amountInput.forceActiveFocus() } }
                     }
                     Item { Layout.fillHeight: true }
                     Action {
@@ -1319,13 +1363,6 @@ ShellRoot {
                     }
                     DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
                     DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
-                    Secondary { text: app.revealShare ? "Hide text" : "Show full text"; onClicked: app.revealShare = !app.revealShare }
-                    Controls.TextArea {
-                        visible: app.revealShare
-                        Layout.fillWidth: true; readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
-                        text: backend.share.token || backend.share.invoice || ""; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption
-                        background: Rectangle { color: "transparent" }
-                    }
                     Label { text: backend.share.token ? "Anyone holding this token can redeem it. Reopen or reclaim it from History." : "You can close this window. Your unlocked wallet keeps checking for payment."; opacity: 0.6; Layout.fillWidth: true }
                     Secondary { text: "Done"; onClicked: app.back() }
                 }
@@ -1362,7 +1399,7 @@ ShellRoot {
                             onClicked: backend.request("select_mint", {url: modelData.url})
                         }
                     }
-                    Entry { heading: "+  Add a mint"; detail: "Choose a suggestion or use a mint URL."; onClicked: app.go("add_mint") }
+                    Entry { icon: "󰐕"; heading: "Add mint"; onClicked: app.go("add_mint") }
                     Label { text: "Each mint holds a separate balance; the wallet shows their total. The checked mint is used for new payments, and you can switch it when entering an amount."; opacity: 0.6; Layout.fillWidth: true }
                 }
                 ColumnLayout {
