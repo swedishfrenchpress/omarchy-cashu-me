@@ -885,14 +885,11 @@ ShellRoot {
                     Layout.preferredHeight: Math.max(implicitHeight, contentScroll.availableHeight - header.height - parent.spacing)
                     onVisibleChanged: if (visible) amountInput.forceActiveFocus()
                     Label { text: app.page === "send_amount" ? "Send ecash" : "Receive Lightning"; font.pixelSize: Style.font.heading; font.bold: true }
-                    Button {
+                    Action {
                         visible: app.mints.length > 1
                         text: app.selectedMint.name + " · " + app.amountLabel(app.selectedMint.spendable) + " available"
                         iconText: "󰅀"
-                        focusable: true
                         enabled: !backend.busy
-                        opacity: 0.7
-                        Layout.alignment: Qt.AlignHCenter
                         Accessible.name: text + ". Tap to switch mint"
                         onClicked: { app.cycleMint(); amountInput.forceActiveFocus() }
                     }
@@ -967,15 +964,16 @@ ShellRoot {
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "share"
                     Layout.fillWidth: true
-                    spacing: Style.space(20)
+                    // Sized so the QR, amount, mint and copy button all fit
+                    // the panel without scrolling; only the notes and Done
+                    // sit below the fold.
+                    spacing: Style.space(app.compact ? 12 : 20)
                     Label { text: backend.share.token ? "Pending ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
+                    Image { source: backend.share.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(app.compact ? 180 : 280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
                     // Shown in the unit the amount was typed in, with the
                     // other beneath, so a dollar request still reads as one.
-                    AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(32); animated: false }
+                    AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
                     Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
-                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
                     Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
                         text: clipboard.running ? "Copied · waiting for paste" : backend.share.token ? "Copy token" : "Copy invoice"
@@ -983,6 +981,8 @@ ShellRoot {
                         Layout.fillWidth: true
                         onClicked: { app.clipboardText = backend.share.token || backend.share.invoice || ""; clipboard.stdinEnabled = true; clipboard.running = true }
                     }
+                    DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
+                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
                     Secondary { text: app.revealShare ? "Hide text" : "Show full text"; onClicked: app.revealShare = !app.revealShare }
                     Controls.TextArea {
                         visible: app.revealShare
