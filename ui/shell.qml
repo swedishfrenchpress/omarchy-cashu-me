@@ -609,8 +609,9 @@ ShellRoot {
                     IconButton {
                         visible: app.walletVisible
                         enabled: !app.mainPage && !backend.review && !backend.busy
-                        opacity: app.mainPage ? 0 : (enabled ? 1 : 0.4)
-                        Accessible.ignored: app.mainPage
+                        // A review has Cancel as its only way back.
+                        opacity: app.mainPage || backend.review ? 0 : (enabled ? 1 : 0.4)
+                        Accessible.ignored: app.mainPage || !!backend.review
                         iconText: "󰁍"
                         Accessible.name: "Back"
                         onClicked: app.back()
@@ -740,11 +741,13 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: backend.review ? backend.review.kind : ""; font.pixelSize: Style.font.heading; font.bold: true }
-                    Label { text: backend.review && backend.review.amount ? app.amountLabel(backend.review.amount) : "Reclaim unspent ecash"; font.pixelSize: Style.space(36); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    AmountDisplay { visible: !!backend.review && !!backend.review.amount; amount: backend.review ? backend.review.amount : 0; size: Style.space(36); animated: false }
+                    Label { visible: !!backend.review && !backend.review.amount; text: "Reclaim unspent ecash"; font.pixelSize: Style.space(24); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Divider {}
                     DetailRow { heading: "Mint"; value: backend.review ? app.mintName(backend.review.mint) : "" }
-                    DetailRow { visible: !!backend.review && !!backend.review.fee; heading: "Maximum fee"; value: backend.review ? app.amountLabel(backend.review.fee) : "" }
-                    DetailRow { visible: !!backend.review && !!backend.review.total; heading: "Maximum total"; value: backend.review ? app.amountLabel(backend.review.total) : "" }
+                    // A zero fee is noise, and the total is the amount plus
+                    // that fee, which the reader can add. Only a real fee shows.
+                    DetailRow { visible: !!backend.review && Number(backend.review.fee || 0) > 0; heading: "Maximum fee"; value: backend.review ? app.primaryAmount(backend.review.fee) : "" }
                     DetailRow { visible: !!backend.review && !!backend.review.expiry; heading: "Quote expires"; value: backend.review && backend.review.expiry ? app.momentFor(backend.review.expiry) : "" }
                     Label { visible: !!backend.review && backend.review.receiving === true; text: "The mint may deduct an input fee. You will see the amount received after redemption."; Layout.fillWidth: true; opacity: 0.65 }
                     Label { visible: app.reviewExpired; text: "This quote has expired. Cancel it and create the payment again."; Layout.fillWidth: true; opacity: 0.8 }
