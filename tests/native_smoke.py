@@ -16,7 +16,7 @@ OMARCHY = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
 
 class NativeSmoke(unittest.TestCase):
     def test_theme_replacement_and_background_lifecycle(self):
-        with tempfile.TemporaryDirectory(prefix="chaumarchy-smoke-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="cashu-me-smoke-") as temporary:
             base = Path(temporary)
             home = base / "home"
             runtime = base / "runtime"
@@ -53,11 +53,11 @@ class NativeSmoke(unittest.TestCase):
 ''' , 1))
             environment = dict(os.environ, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
                                XDG_CONFIG_HOME=str(home / ".config"),
-                               QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", CHAUMARCHY_PREVIEW="1")
+                               QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", CASHU_ME_PREVIEW="1")
             environment.pop("WAYLAND_DISPLAY", None)
             environment.pop("DISPLAY", None)
             environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
-            if os.environ.get("CHAUMARCHY_TEST_WAYLAND") == "1":
+            if os.environ.get("CASHU_ME_TEST_WAYLAND") == "1":
                 environment["QT_QPA_PLATFORM"] = "wayland"
                 environment["WAYLAND_DISPLAY"] = str(Path(os.environ["XDG_RUNTIME_DIR"]) / os.environ["WAYLAND_DISPLAY"])
             log_path = base / "qml.log"
@@ -130,8 +130,8 @@ class NativeSmoke(unittest.TestCase):
                         self.assertTrue(dimensions["panel"])
                         self.assertGreater(dimensions["width"], 250)
                         self.assertLess(dimensions["width"], 460)
-                        if os.environ.get("CHAUMARCHY_TEST_CAPTURE"):
-                            subprocess.run(["quickshell", "ipc", "-p", str(ui), "call", "--", "test", "capture", os.environ["CHAUMARCHY_TEST_CAPTURE"]], env=environment, check=True)
+                        if os.environ.get("CASHU_ME_TEST_CAPTURE"):
+                            subprocess.run(["quickshell", "ipc", "-p", str(ui), "call", "--", "test", "capture", os.environ["CASHU_ME_TEST_CAPTURE"]], env=environment, check=True)
                             time.sleep(0.3)
                     self.assertEqual(ipc("quit").returncode, 0)
                     self.assertEqual(process.wait(timeout=5), 0)
@@ -144,7 +144,7 @@ class NativeSmoke(unittest.TestCase):
                     # pass: an unqualified OK here would otherwise look like
                     # coverage of the motion behaviour it never exercised.
                     if environment["QT_QPA_PLATFORM"] != "wayland":
-                        self.skipTest("panel geometry and motion checks need CHAUMARCHY_TEST_WAYLAND=1 on a running Wayland desktop")
+                        self.skipTest("panel geometry and motion checks need CASHU_ME_TEST_WAYLAND=1 on a running Wayland desktop")
                 finally:
                     if process.poll() is None:
                         process.terminate()

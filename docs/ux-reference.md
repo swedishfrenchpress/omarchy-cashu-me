@@ -10,7 +10,7 @@ The reference is MIT licensed, copyright 2026 cashubtc. This implementation
 adapts interaction patterns in original QML; it does not bundle its mobile code,
 artwork, screenshots, or platform styling.
 
-| Reference pattern | Chaumarchy adaptation |
+| Reference pattern | cashu.me adaptation |
 | --- | --- |
 | Wallet / History / Mints tabs | Persistent native navigation on the three main pages; Ctrl+1/2/3 shortcuts. |
 | Mint selector above balance | The wallet page shows the total balance across mints, as Cashu.me does; the Mints page lists each mint's balance and marks the mint used for new payments. Receive before Send. |

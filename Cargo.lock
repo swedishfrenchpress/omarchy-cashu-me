@@ -337,6 +337,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cashu-me"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bip39",
+ "bitreq",
+ "cdk",
+ "cdk-sqlite",
+ "fs2",
+ "libc",
+ "qrcode",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "cbor-diag"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -519,27 +540,6 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "chaumarchy"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bip39",
- "bitreq",
- "cdk",
- "cdk-sqlite",
- "fs2",
- "libc",
- "qrcode",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "url",
- "zeroize",
-]
 
 [[package]]
 name = "chrono"

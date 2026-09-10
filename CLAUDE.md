@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Chaumarchy is a native Cashu ecash wallet for Omarchy (a Linux desktop environment). It uses:
+cashu.me is a native Cashu ecash wallet for Omarchy (a Linux desktop environment). It uses:
 - **Backend**: Rust with [Cashu Development Kit (CDK)](https://github.com/cashubtc/cdk) for wallet operations, pinned to **0.18.0**
 - **Frontend**: Quickshell/QML using installed Omarchy Commons and Ui modules
 - **Architecture**: Rust worker process communicates with QML frontend via newline-delimited JSON on stdin/stdout
@@ -34,14 +34,14 @@ cargo build --release --locked
 ./bin/install-desktop
 
 # Run the app (after installation)
-chaumarchy
+cashu-me
 
 # Check app status or quit it
-chaumarchy --status
-chaumarchy --quit
+cashu-me --status
+cashu-me --quit
 
 # Preview mode: launches separate UI without wallet functionality
-./bin/chaumarchy --preview
+./bin/cashu-me --preview
 ```
 
 ### Testing with fake CDK mint (end-to-end validation)
@@ -50,11 +50,11 @@ The wallet is validated against a temporary fake-payment CDK mint using Python i
 
 ```sh
 # Terminal 1: Build and install the test mint
-cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/chaumarchy-test-tools
-/tmp/chaumarchy-test-tools/bin/cdk-mintd -w /tmp/chaumarchy-local-mint config init --file tests/mint.toml --new-mint
+cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/cashu-me-test-tools
+/tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint config init --file tests/mint.toml --new-mint
 
 # Terminal 2: Start the test mint (use this exact seed for test fixtures)
-CHAUMARCHY_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/chaumarchy-test-tools/bin/cdk-mintd -w /tmp/chaumarchy-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint
 
 # Terminal 3: Run integration tests
 python3 tests/wallet_integration.py
@@ -79,7 +79,7 @@ The backend is a single long-running worker process controlled by QML through JS
 
 **src/main.rs** — Process entry point, security hardening, and request dispatcher:
 - Disables core dumps and ptrace access to protect wallet secrets
-- Manages data directory location (`$CHAUMARCHY_DATA_DIR`, `$XDG_DATA_HOME`, or `~/.local/share/chaumarchy`)
+- Manages data directory location (`$CASHU_ME_DATA_DIR`, `$XDG_DATA_HOME`, or `~/.local/share/cashu-me`)
 - Reads JSON requests from stdin, dispatches to handler modules
 - Generates QR codes for tokens/invoices as base64 data: URIs
 
@@ -100,7 +100,7 @@ The backend is a single long-running worker process controlled by QML through JS
 - Timeout handling defers to reconciliation rather than retry loops
 
 **src/diagnostics.rs** — Opt-in error diagnostics:
-- Off unless `CHAUMARCHY_LOG` names a file; appends the failing operation and the underlying library message, bounded per line, created 0600
+- Off unless `CASHU_ME_LOG` names a file; appends the failing operation and the underlying library message, bounded per line, created 0600
 - Never records a password, recovery phrase, token, or request body
 - Exists because every user-facing error is a fixed string, which otherwise makes a structural mint incompatibility indistinguishable from a transient network failure
 
@@ -173,7 +173,7 @@ Rust emits JSON objects to stdout with response IDs, results, and optional gener
 - **Fake mint**: All integration tests use a temporary, locally-run CDK mint to avoid contacting real mints or moving real funds
 - **Disposable wallets**: Test wallets live in temporary directories and are cleaned up after each test
 - **No desktop modifications**: Tests do not change the actual theme, lock state, or application launcher
-- **Offscreen rendering**: Native smoke tests use Qt's offscreen backend unless `CHAUMARCHY_TEST_WAYLAND=1` captures real panel rendering
+- **Offscreen rendering**: Native smoke tests use Qt's offscreen backend unless `CASHU_ME_TEST_WAYLAND=1` captures real panel rendering
 
 ### State Management
 
@@ -207,7 +207,7 @@ Rust emits JSON objects to stdout with response IDs, results, and optional gener
 
 ### UX Reference
 
-See `docs/ux-reference.md` for mapping between Cashubtc/Wallet flows and Chaumarchy's Omarchy-native controls. The wallet uses:
+See `docs/ux-reference.md` for mapping between Cashubtc/Wallet flows and cashu.me's Omarchy-native controls. The wallet uses:
 - Ctrl+1/2/3 for Wallet/History/Mints tabs
 - Ctrl+, for Settings
 - Back arrow, Escape, or Alt+Left to navigate back
@@ -216,7 +216,7 @@ See `docs/ux-reference.md` for mapping between Cashubtc/Wallet flows and Chaumar
 ### Motion and Accessibility
 
 - `docs/motion.md`: Details on interruptible transitions, pointer feedback, and reduced-motion mode
-- Quickshell environment variable `CHAUMARCHY_ANIMATE` controls presentation motion
+- Quickshell environment variable `CASHU_ME_ANIMATE` controls presentation motion
 - All animations have `MotionPreferences.reduceMotion` checks
 
 ## Current Limitations
@@ -233,13 +233,13 @@ See `PLAN.md` for detailed progress tracking and `docs/testing.md` for validatio
 
 ## Configuration and Environment
 
-- `$CHAUMARCHY_DATA_DIR`: Override wallet data location (default: `~/.local/share/chaumarchy`)
+- `$CASHU_ME_DATA_DIR`: Override wallet data location (default: `~/.local/share/cashu-me`)
 - `$XDG_DATA_HOME`: Falls back to this before the default
-- `$CHAUMARCHY_ANIMATE`: Set to "1" to enable motion in preview/testing
-- `$CHAUMARCHY_PREVIEW`: Used by preview mode to disable wallet functions
-- `$CHAUMARCHY_WINDOW`: Set to "1" to open in window mode instead of compact panel
-- `$CHAUMARCHY_TEST_MINT_SEED`: BIP39 seed for the fake test mint (use only the fixture in `docs/testing.md`)
-- `$CHAUMARCHY_TEST_WAYLAND`: Set to "1" to render the actual panel on a running Wayland desktop
+- `$CASHU_ME_ANIMATE`: Set to "1" to enable motion in preview/testing
+- `$CASHU_ME_PREVIEW`: Used by preview mode to disable wallet functions
+- `$CASHU_ME_WINDOW`: Set to "1" to open in window mode instead of compact panel
+- `$CASHU_ME_TEST_MINT_SEED`: BIP39 seed for the fake test mint (use only the fixture in `docs/testing.md`)
+- `$CASHU_ME_TEST_WAYLAND`: Set to "1" to render the actual panel on a running Wayland desktop
 
 ## Dependencies
 

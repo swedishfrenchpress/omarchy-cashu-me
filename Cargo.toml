@@ -1,14 +1,14 @@
 [package]
-name = "chaumarchy"
+name = "cashu-me"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 description = "Native Omarchy Cashu wallet"
-repository = "https://github.com/swedishfrenchpress/chaumarchy"
+repository = "https://github.com/swedishfrenchpress/omarchy-cashu-me"
 
 [[bin]]
-name = "chaumarchy-wallet"
+name = "cashu-me-wallet"
 path = "src/main.rs"
 
 [dependencies]

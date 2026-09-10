@@ -3,30 +3,30 @@ set -euo pipefail
 
 project_dir=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
 omarchy_shell=${OMARCHY_PATH:-/usr/share/omarchy}/shell
-runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/ui
-export CHAUMARCHY_BACKEND="$project_dir/target/debug/chaumarchy-wallet"
-if [[ -x $project_dir/target/release/chaumarchy-wallet ]]; then
-  export CHAUMARCHY_BACKEND="$project_dir/target/release/chaumarchy-wallet"
+runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/cashu-me/ui
+export CASHU_ME_BACKEND="$project_dir/target/debug/cashu-me-wallet"
+if [[ -x $project_dir/target/release/cashu-me-wallet ]]; then
+  export CASHU_ME_BACKEND="$project_dir/target/release/cashu-me-wallet"
 fi
-export CHAUMARCHY_SCANNER="$project_dir/bin/scan-qr"
-export CHAUMARCHY_PREVIEW=0
-export CHAUMARCHY_WINDOW=0
-export CHAUMARCHY_ANIMATE=0
-export CHAUMARCHY_ANCHOR_X=${3:--1}
-export CHAUMARCHY_SCREEN=${2:-}
+export CASHU_ME_SCANNER="$project_dir/bin/scan-qr"
+export CASHU_ME_PREVIEW=0
+export CASHU_ME_WINDOW=0
+export CASHU_ME_ANIMATE=0
+export CASHU_ME_ANCHOR_X=${3:--1}
+export CASHU_ME_SCREEN=${2:-}
 ipc_method=show
 ipc_args=()
 if [[ ${1:-} == "--window" ]]; then
-  export CHAUMARCHY_WINDOW=1
+  export CASHU_ME_WINDOW=1
   ipc_method=expand
 elif [[ ${1:-} == "--toggle" ]]; then
-  export CHAUMARCHY_ANIMATE=1
+  export CASHU_ME_ANIMATE=1
   ipc_method=toggleAt
-  ipc_args=("$CHAUMARCHY_SCREEN" "$CHAUMARCHY_ANCHOR_X")
+  ipc_args=("$CASHU_ME_SCREEN" "$CASHU_ME_ANCHOR_X")
 fi
 if [[ ${1:-} == "--preview" || ${1:-} == "--check" ]]; then
-  export CHAUMARCHY_PREVIEW=1
-  runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/chaumarchy/preview
+  export CASHU_ME_PREVIEW=1
+  runtime_dir=${XDG_CACHE_HOME:-$HOME/.cache}/cashu-me/preview
 fi
 
 # Checked before the dispatch below, which execs quickshell directly: without
@@ -38,7 +38,7 @@ case ${1:-} in
   --quit) exec quickshell ipc -p "$runtime_dir" call -- wallet quit ;;
   --status) exec quickshell ipc -p "$runtime_dir" call -- wallet status ;;
   --check|--preview|--window|--toggle|"") ;;
-  *) echo 'Usage: chaumarchy [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
+  *) echo 'Usage: cashu-me [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
 # Reopening must not hot-reload a running wallet or interrupt its worker.
@@ -48,7 +48,7 @@ fi
 # An older running UI may not implement a newly added presentation method.
 # Never mistake that for an absent instance and hot-reload a live wallet.
 if [[ ${1:-} != "--check" ]] && quickshell ipc -p "$runtime_dir" call -- wallet status >/dev/null 2>&1; then
-  echo 'Chaumarchy is already running. Quit and reopen it to load this update.' >&2
+  echo 'cashu.me is already running. Quit and reopen it to load this update.' >&2
   exit 1
 fi
 
@@ -84,10 +84,10 @@ case ${1:-} in
   --check) exec quickshell -p "$runtime_dir" ;;
   --preview|--window|--toggle) ;;
   "") ;;
-  *) echo 'Usage: chaumarchy [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
+  *) echo 'Usage: cashu-me [--window|--toggle [screen]|--preview|--status|--quit|--check]' >&2; exit 2 ;;
 esac
 
-if [[ $CHAUMARCHY_PREVIEW == 0 && ! -x $CHAUMARCHY_BACKEND ]]; then
+if [[ $CASHU_ME_PREVIEW == 0 && ! -x $CASHU_ME_BACKEND ]]; then
   echo 'Build the wallet worker with cargo build --locked, or use --preview.' >&2
   exit 1
 fi

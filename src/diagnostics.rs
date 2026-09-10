@@ -1,4 +1,4 @@
-//! Opt-in error diagnostics, written only when CHAUMARCHY_LOG names a file.
+//! Opt-in error diagnostics, written only when CASHU_ME_LOG names a file.
 //!
 //! Every user-facing error in this wallet is a fixed string, which leaves no
 //! way to tell a structural mint incompatibility from a transient network
@@ -15,7 +15,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn note(context: &str, error: &dyn Display) {
-    let Some(path) = std::env::var_os("CHAUMARCHY_LOG") else {
+    let Some(path) = std::env::var_os("CASHU_ME_LOG") else {
         return;
     };
     let seconds = SystemTime::now()
@@ -59,16 +59,16 @@ mod tests {
     fn records_causes_only_when_a_destination_is_configured() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("diagnostics.log");
-        std::env::remove_var("CHAUMARCHY_LOG");
+        std::env::remove_var("CASHU_ME_LOG");
         note("unconfigured", &"must not be written");
         assert!(!path.exists());
 
-        std::env::set_var("CHAUMARCHY_LOG", &path);
+        std::env::set_var("CASHU_ME_LOG", &path);
         note("context", &"underlying failure");
         assert!(!logged("failing step", Err::<(), _>("cause")));
         assert!(logged("passing step", Ok::<_, &str>(())));
         note("bounded", &"x".repeat(5000));
-        std::env::remove_var("CHAUMARCHY_LOG");
+        std::env::remove_var("CASHU_ME_LOG");
 
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("context: underlying failure"));

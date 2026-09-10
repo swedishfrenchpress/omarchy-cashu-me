@@ -23,8 +23,8 @@ class Worker:
     def __init__(self, directory):
         self.directory = directory
         self.sequence = 0
-        self.process = subprocess.Popen([str(PROJECT / "target/debug/chaumarchy-wallet")],
-            env=dict(os.environ, CHAUMARCHY_DATA_DIR=str(directory)), stdin=subprocess.PIPE,
+        self.process = subprocess.Popen([str(PROJECT / "target/debug/cashu-me-wallet")],
+            env=dict(os.environ, CASHU_ME_DATA_DIR=str(directory)), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.read()
 
@@ -75,9 +75,9 @@ class WalletIntegration(unittest.TestCase):
     def test_payments_backup_and_crash_recovery(self):
         with urllib.request.urlopen(MINT + "/v1/info", timeout=3) as response:
             info = json.load(response)
-        self.assertEqual(info["name"], "Chaumarchy test mint", "Refusing to test against an unidentified mint")
+        self.assertEqual(info["name"], "cashu.me test mint", "Refusing to test against an unidentified mint")
         workers = []
-        with tempfile.TemporaryDirectory(prefix="chaumarchy-wallet-test-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="cashu-me-wallet-test-") as temporary:
             directory = Path(temporary)
             try:
                 alice = Worker(directory / "alice"); workers.append(alice)

@@ -221,7 +221,7 @@ impl Session {
             .map_err(|_| "Wallet metadata is missing or damaged.")?;
         let phrase = Zeroizing::new(phrase);
         if version != 1 {
-            return Err("This wallet requires a newer Chaumarchy version.");
+            return Err("This wallet requires a newer cashu.me version.");
         }
         let mnemonic = Mnemonic::parse(phrase.as_str()).map_err(|_| "Recovery data is damaged.")?;
         let settings: Settings =
@@ -303,7 +303,7 @@ impl Session {
         }
         if info["nuts"]["9"]["supported"] != true {
             return Err(
-                "This mint does not advertise the restoration support required by Chaumarchy.",
+                "This mint does not advertise the restoration support required by cashu.me.",
             );
         }
         // The name is mint-controlled and is rendered by shared Omarchy
@@ -717,7 +717,7 @@ impl Session {
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|_| "This is not a Chaumarchy backup.")?;
+            .map_err(|_| "This is not a cashu.me backup.")?;
         let phrase = Zeroizing::new(phrase);
         if version != 1 || Mnemonic::parse(phrase.as_str()).is_err() {
             return Err("Unsupported or damaged backup.");

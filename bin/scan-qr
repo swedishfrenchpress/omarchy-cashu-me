@@ -51,7 +51,7 @@ try:
         decoded = run(["zbarcam", "--raw", "--quiet", "--oneshot", "--nodisplay", "--nodbus",
                        "--prescale=640x480", "-Sdisable", "-Sqrcode.enable"])
     else:
-        with tempfile.TemporaryDirectory(prefix="chaumarchy-qr-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="cashu-me-qr-") as temporary:
             if mode == "screen":
                 geometry = run(["slurp"], 30)
                 path = Path(temporary) / "capture.png"

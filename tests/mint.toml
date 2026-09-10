@@ -3,7 +3,7 @@
 url = "http://127.0.0.1:33381"
 listen_host = "127.0.0.1"
 listen_port = 33381
-mnemonic = "env:CHAUMARCHY_TEST_MINT_SEED"
+mnemonic = "env:CASHU_ME_TEST_MINT_SEED"
 
 [info.logging]
 output = "stderr"
@@ -13,7 +13,7 @@ console_level = "error"
 engine = "sqlite"
 
 [mint_info]
-name = "Chaumarchy test mint"
+name = "cashu.me test mint"
 description = "Fake payments for local tests only"
 
 [payment_backend]

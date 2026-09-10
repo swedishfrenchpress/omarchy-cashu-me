@@ -27,7 +27,7 @@ PanelWindow {
     implicitHeight: Math.min(Style.space(590), screen ? screen.height - margins.top - Style.gapsOut : 590)
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
-    WlrLayershell.namespace: "chaumarchy-panel"
+    WlrLayershell.namespace: "cashu-me-panel"
     WlrLayershell.layer: WlrLayer.Overlay
     // Release all input immediately, even while the visual exit is finishing.
     WlrLayershell.keyboardFocus: open && !privacyHidden ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None

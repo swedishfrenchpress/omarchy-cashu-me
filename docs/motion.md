@@ -1,4 +1,4 @@
-# Chaumarchy motion
+# cashu.me motion
 
 Reference: [Emil Kowalski’s design and animation skills](https://github.com/emilkowalski/skills), read on 2026-09-09. Implementation uses native QML and the installed Omarchy controls; no motion runtime or web dependencies.
 
@@ -27,7 +27,7 @@ Reference: [Emil Kowalski’s design and animation skills](https://github.com/em
 
 `MotionButton` passively observes pointer presses without emitting actions or taking the native button’s exclusive grab. Keyboard activation does not trigger compression. Reduced motion leaves native color feedback intact.
 
-Preferences live in `$XDG_CONFIG_HOME/chaumarchy/appearance.ini` (normally `~/.config/chaumarchy/appearance.ini`). `CHAUMARCHY_REDUCED_MOTION=1` forces reduced motion. This is an app preference, not an automatic reading of compositor animation settings.
+Preferences live in `$XDG_CONFIG_HOME/cashu-me/appearance.ini` (normally `~/.config/cashu-me/appearance.ini`). `CASHU_ME_REDUCED_MOTION=1` forces reduced motion. This is an app preference, not an automatic reading of compositor animation settings.
 
 ## Validation and feel checks
 

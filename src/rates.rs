@@ -1,5 +1,5 @@
 //! Local-currency display is a convenience layer over sat amounts, not a
-//! wallet capability: Chaumarchy holds and moves sats only, and every mint
+//! wallet capability: cashu.me holds and moves sats only, and every mint
 //! call stays denominated in sats regardless of what this module returns.
 //! A failure here must never surface as a wallet error or block a payment;
 //! callers treat it as "no rate yet" and keep showing sats.

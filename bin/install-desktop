@@ -9,21 +9,35 @@ import tempfile
 import time
 
 project = Path(__file__).resolve().parents[1]
-if not (project / "target/release/chaumarchy-wallet").is_file():
+if not (project / "target/release/cashu-me-wallet").is_file():
     raise SystemExit("Build first: cargo build --release --locked")
-launcher = Path.home() / ".local/bin/chaumarchy"
+launcher = Path.home() / ".local/bin/cashu-me"
 applications = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "applications"
-entry = applications / "chaumarchy.desktop"
-marker = "# Managed by Chaumarchy install-desktop\n"
+entry = applications / "cashu-me.desktop"
+marker = "# Managed by cashu.me install-desktop\n"
 config = Path.home() / ".config/omarchy"
-plugin = config / "plugins/chaumarchy.wallet"
-if plugin.exists() and not (plugin / ".chaumarchy-managed").is_file():
-    raise SystemExit("An unrelated chaumarchy.wallet plugin already exists; nothing changed.")
+plugin = config / "plugins/cashu-me.wallet"
+# Retire an install made under the app's previous name, Chaumarchy, but only
+# the pieces that installer created: its launcher symlink, its marked desktop
+# entry and its marked plugin folder. Anything unmarked is left alone.
+legacy_marker = "# Managed by Chaumarchy install-desktop\n"
+legacy_launcher = Path.home() / ".local/bin/chaumarchy"
+if legacy_launcher.is_symlink() and str(legacy_launcher.resolve()).startswith(str(project)):
+    legacy_launcher.unlink()
+legacy_entry = applications / "chaumarchy.desktop"
+if legacy_entry.is_file() and legacy_entry.read_text().startswith(legacy_marker):
+    legacy_entry.unlink()
+legacy_plugin = config / "plugins/chaumarchy.wallet"
+if (legacy_plugin / ".chaumarchy-managed").is_file():
+    subprocess.run(["omarchy", "plugin", "disable", "chaumarchy.wallet"], check=False)
+    shutil.rmtree(legacy_plugin)
+if plugin.exists() and not (plugin / ".cashu-me-managed").is_file():
+    raise SystemExit("An unrelated cashu-me.wallet plugin already exists; nothing changed.")
 subprocess.run(["omarchy", "plugin", "validate", str(project / "plugin")], check=True)
-if (launcher.exists() or launcher.is_symlink()) and not (launcher.is_symlink() and launcher.resolve() == project / "bin/chaumarchy"):
-    raise SystemExit("An unrelated ~/.local/bin/chaumarchy already exists; nothing changed.")
+if (launcher.exists() or launcher.is_symlink()) and not (launcher.is_symlink() and launcher.resolve() == project / "bin/cashu-me"):
+    raise SystemExit("An unrelated ~/.local/bin/cashu-me already exists; nothing changed.")
 if entry.exists() and not entry.read_text().startswith(marker):
-    raise SystemExit("An unrelated Chaumarchy desktop entry already exists; nothing changed.")
+    raise SystemExit("An unrelated cashu.me desktop entry already exists; nothing changed.")
 # Desktop Exec quoting differs from shell quoting; do not invoke a shell.
 quoted = str(launcher).replace("\\", "\\\\\\\\").replace('"', '\\\\"').replace("`", "\\\\`").replace("$", "\\\\$").replace("%", "%%")
 if "\n" in quoted or "\r" in quoted:
@@ -31,23 +45,23 @@ if "\n" in quoted or "\r" in quoted:
 launcher.parent.mkdir(parents=True, exist_ok=True)
 applications.mkdir(parents=True, exist_ok=True)
 if not launcher.is_symlink():
-    launcher.symlink_to(project / "bin/chaumarchy")
-entry_text = (marker + '[Desktop Entry]\nType=Application\nName=Chaumarchy\nComment=Cashu wallet for Omarchy\n'
+    launcher.symlink_to(project / "bin/cashu-me")
+entry_text = (marker + '[Desktop Entry]\nType=Application\nName=cashu.me\nComment=Cashu wallet for Omarchy\n'
     + f'Exec="{quoted}"\nIcon=wallet\nTerminal=false\nCategories=Office;Finance;\nKeywords=Cashu;Bitcoin;Wallet;\n')
 # Validate before publishing, and publish atomically. Writing in place left a
 # rejected entry in the launcher, and a truncated write left a file without the
 # marker, which permanently blocks every later run.
-with tempfile.TemporaryDirectory(prefix="chaumarchy-entry-") as staging:
-    staged = Path(staging) / "chaumarchy.desktop"
+with tempfile.TemporaryDirectory(prefix="cashu-me-entry-") as staging:
+    staged = Path(staging) / "cashu-me.desktop"
     staged.write_text(entry_text)
     subprocess.run(["desktop-file-validate", str(staged)], check=True)
-publish = entry.with_name(f".chaumarchy.{os.getpid()}.desktop.tmp")
+publish = entry.with_name(f".cashu-me.{os.getpid()}.desktop.tmp")
 publish.write_text(entry_text)
 os.replace(publish, entry)
 plugin.mkdir(parents=True, exist_ok=True)
 # Claim ownership before copying contents: an interruption between the two
 # would leave an unmarked directory that blocks every later run.
-(plugin / ".chaumarchy-managed").write_text(marker)
+(plugin / ".cashu-me-managed").write_text(marker)
 for source in (project / "plugin").iterdir():
     if source.is_file():
         shutil.copy2(source, plugin / source.name)
@@ -67,17 +81,17 @@ if managed_bar and shell_config.exists():
     bar = parsed.get("bar") if isinstance(parsed, dict) else None
     sections = bar.get("layout") if isinstance(bar, dict) else None
     layout = sections if isinstance(sections, dict) else {}
-installed = any(item.get("id") == "chaumarchy.wallet"
+installed = any(item.get("id") == "cashu-me.wallet"
                 for section in layout.values() if isinstance(section, list)
                 for item in section if isinstance(item, dict))
 subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=True)
 if not installed and managed_bar:
     if shell_config.exists():
-        shutil.copy2(shell_config, shell_config.with_name(f"shell.json.bak.chaumarchy.{time.time_ns()}"))
-    subprocess.run(["omarchy", "plugin", "enable", "chaumarchy.wallet", "--section", "right"], check=True)
+        shutil.copy2(shell_config, shell_config.with_name(f"shell.json.bak.cashu-me.{time.time_ns()}"))
+    subprocess.run(["omarchy", "plugin", "enable", "cashu-me.wallet", "--section", "right"], check=True)
 if managed_bar:
-    print("Installed Chaumarchy in your application launcher and right-hand bar. Click the wallet icon to open it.")
+    print("Installed cashu.me in your application launcher and right-hand bar. Click the wallet icon to open it.")
 else:
-    print("Installed Chaumarchy in your application launcher.\n"
+    print("Installed cashu.me in your application launcher.\n"
           f"{shell_config} is a symlink, so the bar icon was left alone. Add it with:\n"
-          "  omarchy plugin enable chaumarchy.wallet --section right")
+          "  omarchy plugin enable cashu-me.wallet --section right")

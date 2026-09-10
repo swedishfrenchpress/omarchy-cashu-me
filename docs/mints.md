@@ -15,7 +15,7 @@ On 2026-09-08, read-only HTTPS GET requests to each mint's `/v1/info` endpoint s
 
 Primary sources: [Minibits metadata](https://mint.minibits.cash/Bitcoin/v1/info), [Chorus metadata](https://mint.chorus.community/v1/info), [Antifiat metadata](https://antifiat.cash/v1/info), [Macadamia metadata](https://mint.macadamia.cash/v1/info). These are self-reported mint capabilities, not a solvency audit or a successful payment test.
 
-Preserve the capitalized `/Bitcoin` path for Minibits. Chorus also advertises USD and EUR; Chaumarchy's initial payment flows use sats. Read current capabilities, limits, and fees when adding a mint and preparing payments rather than treating this verification snapshot as live status.
+Preserve the capitalized `/Bitcoin` path for Minibits. Chorus also advertises USD and EUR; cashu.me's initial payment flows use sats. Read current capabilities, limits, and fees when adding a mint and preparing payments rather than treating this verification snapshot as live status.
 
 ## Onboarding behavior
 

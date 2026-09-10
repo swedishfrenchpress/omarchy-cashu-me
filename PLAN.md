@@ -1,4 +1,4 @@
-# Chaumarchy — project plan
+# cashu.me — project plan
 
 Last updated: 2026-09-09
 
@@ -10,7 +10,7 @@ A lean, native Cashu wallet for personal use on Omarchy, with the desktop's cont
 
 | Area | Decision |
 | --- | --- |
-| Name and repository | Chaumarchy; `swedishfrenchpress/chaumarchy`. Local checkout remains `~/Documents/github/cashu-wallet`. |
+| Name and repository | cashu.me; `swedishfrenchpress/omarchy-cashu-me` (renamed from `chaumarchy` on 2026-09-10). Local checkout is `~/Documents/github/cashu.me`. Machine identifiers use `cashu-me`: crate, binary, launcher, data folder, plugin id, and the `CASHU_ME_` env prefix. |
 | Engine | Rust CDK, selected by the user over Coco; pinned CDK and cdk-sqlite 0.18.0 with default features disabled. |
 | Native interface | Compact Quickshell panel opened from a right-hand Omarchy bar icon, expandable into a window. Installed Omarchy Commons and Ui modules; private pipe to the Rust worker. |
 | Appearance | Use Omarchy controls, typography, spacing, and colors; follow theme replacement without restarting the app. |
@@ -82,6 +82,7 @@ This file is the progress tracker. Keep its checkboxes, decisions, and next mile
 - **2026-09-08:** User selected CDK instead of Coco and requested a public GitHub repository before implementation.
 - **2026-09-08:** Authorized repository creation and recording the current plan; wallet implementation remains pending further planning.
 - **2026-09-08:** User named the project Chaumarchy and created `swedishfrenchpress/chaumarchy`. Use that repository and preserve its initial commit and license; retain the requested local folder name `cashu-wallet`.
+- **2026-09-10:** User renamed the project to cashu.me everywhere. The repository became `swedishfrenchpress/omarchy-cashu-me`, the checkout `~/Documents/github/cashu.me`, and machine identifiers `cashu-me` (crate, binary, launcher, data folder, plugin id, `CASHU_ME_` env prefix). The on-disk `chaumarchy_meta` table and backup alias keep their names so existing wallets and backups still open, and a wallet folder created under the old name moves into place once on first start.
 - **2026-09-08:** User selected recent history on home, all proposed QR input methods, and continued background monitoring when the window closes. Started the native interface milestone; payment and security questions remain open.
 - **2026-09-08:** User confirmed locking with the desktop and requested Minibits, Chorus OFF Mint, Antifiat, and Macadamia as onboarding suggestions. Verified their public metadata and recorded the catalog; this does not add them to a live wallet.
 

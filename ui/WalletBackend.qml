@@ -4,7 +4,7 @@ import Quickshell.Io
 
 QtObject {
     id: root
-    readonly property bool preview: Quickshell.env("CHAUMARCHY_PREVIEW") === "1"
+    readonly property bool preview: Quickshell.env("CASHU_ME_PREVIEW") === "1"
     property var state: ({unlocked: false, exists: false, mints: [], selected: null})
     readonly property bool unlocked: state.unlocked === true
     property bool ready: false
@@ -128,8 +128,8 @@ QtObject {
         }
     }
     property Process worker: Process {
-        command: [Quickshell.env("CHAUMARCHY_BACKEND")]
-        running: !root.preview && Quickshell.env("CHAUMARCHY_BACKEND") !== ""
+        command: [Quickshell.env("CASHU_ME_BACKEND")]
+        running: !root.preview && Quickshell.env("CASHU_ME_BACKEND") !== ""
         stdinEnabled: true
         stdout: SplitParser { onRead: data => root.consume(data) }
         // Never forward worker output to QML console logs.
@@ -156,7 +156,7 @@ QtObject {
                 root.error = "The wallet worker stopped unexpectedly and was restarted. Open your wallet again."
                 restartTimer.start()
             }
-            else if (!root.error) root.error = "Wallet worker stopped repeatedly. Reopen Chaumarchy to retry."
+            else if (!root.error) root.error = "Wallet worker stopped repeatedly. Reopen cashu.me to retry."
         }
     }
     property Timer restartTimer: Timer {

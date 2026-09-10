@@ -90,19 +90,31 @@ async fn main() {
         };
         libc::setrlimit(libc::RLIMIT_CORE, &limit);
     }
-    let directory = match std::env::var_os("CHAUMARCHY_DATA_DIR") {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => std::env::var_os("HOME").map(|path| PathBuf::from(path).join(".local/share")),
+    };
+    let directory = match std::env::var_os("CASHU_ME_DATA_DIR") {
         Some(path) => PathBuf::from(path),
-        None => match std::env::var_os("XDG_DATA_HOME") {
-            Some(path) => PathBuf::from(path).join("chaumarchy"),
-            None => match std::env::var_os("HOME") {
-                Some(path) => PathBuf::from(path).join(".local/share/chaumarchy"),
-                None => {
-                    emit(json!({"event":"fatal","error":"No wallet data directory is available."}));
-                    return;
-                }
-            },
+        None => match &base {
+            Some(base) => base.join("cashu-me"),
+            None => {
+                emit(json!({"event":"fatal","error":"No wallet data directory is available."}));
+                return;
+            }
         },
     };
+    // The wallet was called Chaumarchy before; a wallet created under that
+    // name moves into place once, so the rename never strands funds.
+    if let Some(base) = base.filter(|_| std::env::var_os("CASHU_ME_DATA_DIR").is_none()) {
+        let legacy = base.join("chaumarchy");
+        if !directory.exists() && legacy.is_dir() && std::fs::rename(&legacy, &directory).is_err() {
+            emit(
+                json!({"event":"fatal","error":"Could not move the existing wallet folder to its new location."}),
+            );
+            return;
+        }
+    }
     let storage = match Storage::new(&directory) {
         Ok(value) => value,
         Err(error) => {

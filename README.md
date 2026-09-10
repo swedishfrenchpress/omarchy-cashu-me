@@ -1,4 +1,4 @@
-# Chaumarchy
+# cashu.me
 
 A minimal native Cashu wallet for Omarchy. Rust and [CDK](https://github.com/cashubtc/cdk) handle ecash; Qt/QML reuses Omarchy's installed controls, colors, fonts, and spacing. Theme changes apply while the app runs, including while its window is hidden.
 
@@ -11,19 +11,19 @@ Targets Omarchy 4.0.2's Quickshell component kit. Requires Rust/Cargo, a C compi
 ```sh
 cargo build --release --locked
 ./bin/install-desktop
-chaumarchy
+cashu-me
 ```
 
-The installer registers this checkout in your application launcher, creates `~/.local/bin/chaumarchy`, and adds a wallet icon to the right-hand Omarchy bar. It backs up `shell.json` before adding the icon and preserves your existing layout. If `shell.json` is a symlink, as a dotfiles setup usually makes it, the bar step is skipped rather than replacing the link with a regular file, and the command to add the icon yourself is printed instead. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
+The installer registers this checkout in your application launcher, creates `~/.local/bin/cashu-me`, and adds a wallet icon to the right-hand Omarchy bar. It backs up `shell.json` before adding the icon and preserves your existing layout. If `shell.json` is a symlink, as a dotfiles setup usually makes it, the bar step is skipped rather than replacing the link with a regular file, and the command to add the icon yourself is printed instead. Keep the checkout at its installed location. Rebuild the release binary after updating, then quit and reopen the app. Nothing is installed into Omarchy's packaged directories.
 
-For development, `cargo build --locked` works when no release binary exists. `./bin/chaumarchy --preview` opens a separate UI preview with wallet actions disabled.
+For development, `cargo build --locked` works when no release binary exists. `./bin/cashu-me --preview` opens a separate UI preview with wallet actions disabled.
 
 ```sh
-chaumarchy --status
-chaumarchy --quit
+cashu-me --status
+cashu-me --quit
 ```
 
-Click the wallet icon to open a compact panel on that monitor. Click outside, press Escape, or use × to hide it. Use ↗ to expand into a resizable window and ↙ to return to the panel; forms and payment reviews stay intact. Right-click the bar icon, or run `chaumarchy --window`, to open the window directly. The icon persists across login; the wallet starts when first opened.
+Click the wallet icon to open a compact panel on that monitor. Click outside, press Escape, or use × to hide it. Use ↗ to expand into a resizable window and ↙ to return to the panel; forms and payment reviews stay intact. Right-click the bar icon, or run `cashu-me --window`, to open the window directly. The icon persists across login; the wallet starts when first opened.
 
 Closing the panel or window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
 
@@ -47,7 +47,7 @@ Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubt
 
 In Settings → Security, enable a wallet password whenever you want. With it enabled, the wallet requires that password when opened and after desktop lock. Removing it requires the current password.
 
-Without a password, Chaumarchy keeps its database key in a private local file and opens automatically with your desktop session. Anyone able to access your desktop account can open the wallet. Password protection encrypts that key and removes the local unprotected copy. Encrypted backups still have their own password, independently of this setting.
+Without a password, cashu.me keeps its database key in a private local file and opens automatically with your desktop session. Anyone able to access your desktop account can open the wallet. Password protection encrypts that key and removes the local unprotected copy. Encrypted backups still have their own password, independently of this setting.
 
 ## Backup and restore
 
@@ -55,13 +55,13 @@ Settings → Backup & recovery → Recovery phrase opens a full page that explai
 
 Export an encrypted full backup with its own password. The backup includes CDK operation state, recovery data, and mint settings. Export never overwrites a file. Import never overwrites an existing wallet. Stop using the original wallet before restoring a copy. Imported wallets cannot spend until their mints have reconciled the saved state; offline mints are retried.
 
-Wallet data lives in `$XDG_DATA_HOME/chaumarchy`, normally `~/.local/share/chaumarchy`. `CHAUMARCHY_DATA_DIR` selects a separate wallet directory for testing or migration. Do not copy live SQLite files as a substitute for the export action.
+Wallet data lives in `$XDG_DATA_HOME/cashu-me`, normally `~/.local/share/cashu-me`. `CASHU_ME_DATA_DIR` selects a separate wallet directory for testing or migration. Do not copy live SQLite files as a substitute for the export action.
 
 See [architecture and recovery boundaries](docs/architecture.md) and [the validation guide](docs/testing.md).
 
 ## Follow development
 
-[PLAN.md](PLAN.md) tracks decisions, completed checks, and remaining work. Source, tests, and planning live in [swedishfrenchpress/chaumarchy](https://github.com/swedishfrenchpress/chaumarchy).
+[PLAN.md](PLAN.md) tracks decisions, completed checks, and remaining work. Source, tests, and planning live in [swedishfrenchpress/omarchy-cashu-me](https://github.com/swedishfrenchpress/omarchy-cashu-me).
 
 Never commit wallet state, bearer tokens, passwords, recovery phrases, or backups. Tests use temporary wallets and fake payments.
 
@@ -73,4 +73,4 @@ Never commit wallet state, bearer tokens, passwords, recovery phrases, or backup
 - [Cashu.me](https://github.com/cashubtc/cashu.me), interoperability target
 - [Omarchy](https://omarchy.org/), installed native component kit
 
-Chaumarchy is MIT licensed; see [LICENSE](LICENSE). Upstream components retain their respective licenses. The launcher imports installed Omarchy modules; it does not redistribute their source.
+cashu.me is MIT licensed; see [LICENSE](LICENSE). Upstream components retain their respective licenses. The launcher imports installed Omarchy modules; it does not redistribute their source.

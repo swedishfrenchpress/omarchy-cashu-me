@@ -32,7 +32,7 @@ CONTROLS = '''
         function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.entryText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
         function confirm(): void { if (confirmButton.enabled) confirmButton.clicked() }
         function back(): void { app.back() }
-        function capture(): void { surface.grabToImage(result => result.saveToFile(Quickshell.env("CHAUMARCHY_TEST_CAPTURE"))) }
+        function capture(): void { surface.grabToImage(result => result.saveToFile(Quickshell.env("CASHU_ME_TEST_CAPTURE"))) }
         function navigate(destination: string): void { app.tab(destination) }
         function filter(value: string): void { app.historyFilter = value }
         function detail(): void { app.transaction = Object.assign({mint: app.selectedMint.url}, backend.state.history[0]); app.go("transaction") }
@@ -49,7 +49,7 @@ CONTROLS = '''
 
 class NativeWallet(unittest.TestCase):
     def test_worker_payments_and_desktop_lock(self):
-        with tempfile.TemporaryDirectory(prefix="chaumarchy-native-wallet-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="cashu-me-native-wallet-") as temporary:
             base = Path(temporary)
             home = base / "home"
             runtime = base / "runtime"; runtime.mkdir(mode=0o700)
@@ -77,9 +77,9 @@ ShellRoot {
 ''')
             environment = dict(os.environ, HOME=str(home), XDG_RUNTIME_DIR=str(runtime),
                                XDG_CONFIG_HOME=str(home / ".config"),
-                QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software", QT_QPA_PLATFORMTHEME="generic", CHAUMARCHY_PREVIEW="0",
-                OMARCHY_PATH=str(shell.parent), CHAUMARCHY_DATA_DIR=str(base / "wallet"),
-                CHAUMARCHY_BACKEND=str(PROJECT / "target/debug/chaumarchy-wallet"))
+                QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software", QT_QPA_PLATFORMTHEME="generic", CASHU_ME_PREVIEW="0",
+                OMARCHY_PATH=str(shell.parent), CASHU_ME_DATA_DIR=str(base / "wallet"),
+                CASHU_ME_BACKEND=str(PROJECT / "target/debug/cashu-me-wallet"))
             for key in ("WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
                 environment.pop(key, None)
             processes = []
@@ -110,10 +110,10 @@ ShellRoot {
                             time.sleep(0.1)
                         self.fail("UI state did not converge: " + (base / "qml.log").read_text())
                     wait(lambda s: s["ready"] and s["safe"])
-                    if environment.get("CHAUMARCHY_TEST_CAPTURE"):
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
                         call("capture")
                         time.sleep(0.3)
-                        self.assertTrue(Path(environment["CHAUMARCHY_TEST_CAPTURE"]).is_file(), (base / "qml.log").read_text())
+                        self.assertTrue(Path(environment["CASHU_ME_TEST_CAPTURE"]).is_file(), (base / "qml.log").read_text())
                     call("create"); wait(lambda s: s["unlocked"] and not s["busy"])
                     self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["passwordRequired"])
                     # With no password, a hidden wallet should stop on desktop
@@ -143,8 +143,8 @@ ShellRoot {
                     wait(lambda s: s["activityCount"] == 1)
                     call("detail"); wait(lambda s: s["page"] == "transaction")
                     call("back"); wait(lambda s: s["page"] == "history")
-                    if environment.get("CHAUMARCHY_TEST_CAPTURE"):
-                        capture = Path(environment["CHAUMARCHY_TEST_CAPTURE"])
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
+                        capture = Path(environment["CASHU_ME_TEST_CAPTURE"])
                         for page in ("home", "history", "mints", "send", "send_amount", "receive", "settings", "security"):
                             self.assertEqual(ipc(ui, "test", "navigate", page).returncode, 0)
                             wait(lambda s: s["page"] == page)
@@ -170,12 +170,12 @@ ShellRoot {
                     self.assertEqual(ipc(shell, "lock", "setLocked", "false").returncode, 0)
                     wait(lambda s: s["safe"])
                     call("unlock"); wait(lambda s: s["unlocked"] and s["balance"] == "56" and not s["busy"])
-                    if environment.get("CHAUMARCHY_TEST_CAPTURE"):
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
                         call("capture")
                         deadline = time.monotonic() + 5
-                        while not Path(environment["CHAUMARCHY_TEST_CAPTURE"]).exists() and time.monotonic() < deadline:
+                        while not Path(environment["CASHU_ME_TEST_CAPTURE"]).exists() and time.monotonic() < deadline:
                             time.sleep(0.1)
-                        self.assertTrue(Path(environment["CHAUMARCHY_TEST_CAPTURE"]).is_file())
+                        self.assertTrue(Path(environment["CASHU_ME_TEST_CAPTURE"]).is_file())
                     self.assertEqual(ipc(ui, "wallet", "quit").returncode, 0)
                     self.assertEqual(processes[1].wait(timeout=5), 0)
                     output = (base / "qml.log").read_text()

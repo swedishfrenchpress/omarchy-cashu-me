@@ -12,9 +12,9 @@ cargo build --locked
 python3 tests/native_smoke.py
 ```
 
-The native smoke test uses offscreen Qt, an isolated home/runtime directory, and the installed Omarchy kit. It checks atomic dark/light theme replacement while hidden, reopening, and quitting. Native tests require permission to create local IPC sockets. Without `CHAUMARCHY_TEST_WAYLAND=1` it reports a skip rather than a pass, because the panel geometry and motion assertions need a real Wayland desktop and cannot run offscreen.
+The native smoke test uses offscreen Qt, an isolated home/runtime directory, and the installed Omarchy kit. It checks atomic dark/light theme replacement while hidden, reopening, and quitting. Native tests require permission to create local IPC sockets. Without `CASHU_ME_TEST_WAYLAND=1` it reports a skip rather than a pass, because the panel geometry and motion assertions need a real Wayland desktop and cannot run offscreen.
 
-Set `CHAUMARCHY_LOG` to a file path to record why mint operations failed while
+Set `CASHU_ME_LOG` to a file path to record why mint operations failed while
 investigating; see [architecture](architecture.md) for what it does and does not
 contain.
 
@@ -23,17 +23,17 @@ contain.
 Build the optional CDK mint test tool:
 
 ```sh
-cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/chaumarchy-test-tools
-/tmp/chaumarchy-test-tools/bin/cdk-mintd -w /tmp/chaumarchy-local-mint config init --file tests/mint.toml --new-mint
+cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/cashu-me-test-tools
+/tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint config init --file tests/mint.toml --new-mint
 ```
 
 Then start it in a separate terminal using this publicly known BIP39 test fixture (never use this seed for real funds):
 
 ```sh
-CHAUMARCHY_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/chaumarchy-test-tools/bin/cdk-mintd -w /tmp/chaumarchy-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint
 ```
 
-It listens on loopback port 33381, advertises the name `Chaumarchy test mint`, and simulates Lightning payments. HTTP mint URLs are accepted only for loopback hosts. Run:
+It listens on loopback port 33381, advertises the name `cashu.me test mint`, and simulates Lightning payments. HTTP mint URLs are accepted only for loopback hosts. Run:
 
 ```sh
 python3 tests/wallet_integration.py
@@ -63,13 +63,13 @@ On the development machine, Rust 1.98.0 produced a stripped release worker of 16
 
 The Rust security tests cover enabling/removing optional password protection, wrong-password rejection, device-key permissions, recovery-phrase preservation, and restoring an encrypted backup without requiring a new wallet password.
 
-The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering and detail navigation, and exercises the separate Security/Backup pages. Optional `CHAUMARCHY_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet.
+The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering and detail navigation, and exercises the separate Security/Backup pages. Optional `CASHU_ME_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet.
 
 
 For panel rendering on a running Hyprland desktop, run:
 
 ```sh
-CHAUMARCHY_TEST_WAYLAND=1 CHAUMARCHY_TEST_CAPTURE=/tmp/chaumarchy-panel.png python3 tests/native_smoke.py
+CASHU_ME_TEST_WAYLAND=1 CASHU_ME_TEST_CAPTURE=/tmp/cashu-me-panel.png python3 tests/native_smoke.py
 ```
 
 This opens an isolated, non-spending preview, checks panel/window transitions and dimensions, and captures only its content. The normal native wallet test also verifies a prepared payment survives expand/hide/reopen before cancellation. The installed bar button and outside-click behavior should be checked on the desktop; these are not simulated by the offscreen test.

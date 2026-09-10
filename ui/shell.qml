@@ -10,12 +10,12 @@ import "ClockFormat.js" as ClockFormat
 
 ShellRoot {
     id: app
-    property bool compact: Quickshell.env("CHAUMARCHY_WINDOW") !== "1" && Quickshell.env("CHAUMARCHY_PREVIEW") !== "1"
-    property bool presentationMotion: Quickshell.env("CHAUMARCHY_ANIMATE") === "1"
-    property real anchorX: Number(Quickshell.env("CHAUMARCHY_ANCHOR_X") || "-1")
+    property bool compact: Quickshell.env("CASHU_ME_WINDOW") !== "1" && Quickshell.env("CASHU_ME_PREVIEW") !== "1"
+    property bool presentationMotion: Quickshell.env("CASHU_ME_ANIMATE") === "1"
+    property real anchorX: Number(Quickshell.env("CASHU_ME_ANCHOR_X") || "-1")
     MotionPreferences { id: motion }
     property bool presented: true
-    property string outputName: Quickshell.env("CHAUMARCHY_SCREEN") || ""
+    property string outputName: Quickshell.env("CASHU_ME_SCREEN") || ""
     property double dismissedAt: 0
     // Secrets never survive hiding. Navigation and a prepared payment do: the
     // panel is dismissed casually and reopened from the bar, and a review must
@@ -277,7 +277,7 @@ ShellRoot {
         id: exportDialog
         title: "Save encrypted wallet backup"
         fileMode: FileDialog.SaveFile
-        nameFilters: ["Chaumarchy backup (*.backup)"]
+        nameFilters: ["cashu.me backup (*.backup)"]
         defaultSuffix: "backup"
         onAccepted: {
             backend.request("export_backup", {path: decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, "")), password: backupPassword.text})
@@ -293,7 +293,7 @@ ShellRoot {
     function scan(mode, path) {
         if (scanner.running || !backend.unlocked) return
         backend.error = ""
-        scanner.command = [Quickshell.env("CHAUMARCHY_SCANNER"), mode].concat(path ? [path] : [])
+        scanner.command = [Quickshell.env("CASHU_ME_SCANNER"), mode].concat(path ? [path] : [])
         scanner.running = true
     }
     Process {
@@ -332,9 +332,9 @@ ShellRoot {
     Timer { running: !!backend.review; interval: 1000; repeat: true; onTriggered: app.now = Date.now() }
     FileDialog {
         id: importDialog
-        title: "Choose a Chaumarchy backup"
+        title: "Choose a cashu.me backup"
         fileMode: FileDialog.OpenFile
-        nameFilters: ["Chaumarchy backup (*.backup)", "All files (*)"]
+        nameFilters: ["cashu.me backup (*.backup)", "All files (*)"]
         onAccepted: app.restorePath = decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, ""))
     }
 
@@ -563,7 +563,7 @@ ShellRoot {
     }
     FloatingWindow {
         id: window
-        title: backend.preview ? "Chaumarchy — interface preview" : "Chaumarchy"
+        title: backend.preview ? "cashu.me — interface preview" : "cashu.me"
         visible: app.presented && !app.compact
         // Closing the window clears secrets exactly as hiding the panel does.
         onVisibleChanged: if (!visible && !app.compact) app.dismiss(true)
@@ -605,7 +605,7 @@ ShellRoot {
                     // whenever the wallet is visible, and only fade in or out of
                     // relevance per page. Toggling `visible` instead removed
                     // this icon's width from the row, which shifted the
-                    // CHAUMARCHY wordmark sideways every time you navigated.
+                    // CASHU.ME wordmark sideways every time you navigated.
                     IconButton {
                         visible: app.walletVisible
                         enabled: !app.mainPage && !backend.review && !backend.busy
@@ -615,7 +615,7 @@ ShellRoot {
                         Accessible.name: "Back"
                         onClicked: app.back()
                     }
-                    Label { text: "CHAUMARCHY"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
+                    Label { text: "CASHU.ME"; font.bold: true; font.letterSpacing: 1.5; Layout.fillWidth: true }
                     IconButton {
                         visible: app.walletVisible
                         enabled: app.mainPage && !backend.busy
@@ -676,7 +676,7 @@ ShellRoot {
                     }
                 }
                 Label { visible: !app.walletVisible && !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
-                Label { visible: !app.walletVisible && !backend.ready && !backend.error; text: "Starting Chaumarchy…"; opacity: 0.65; Layout.fillWidth: true }
+                Label { visible: !app.walletVisible && !backend.ready && !backend.error; text: "Starting cashu.me…"; opacity: 0.65; Layout.fillWidth: true }
                 ColumnLayout {
                     visible: !app.walletVisible && !backend.state.exists && app.restoreMode
                     Layout.fillWidth: true
@@ -1068,7 +1068,7 @@ ShellRoot {
                     Divider {}
                     Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
                     Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked && !backend.busy && !backend.review; Layout.fillWidth: true; onClicked: backend.lock() }
-                    Secondary { text: "Quit Chaumarchy"; onClicked: Qt.quit() }
+                    Secondary { text: "Quit cashu.me"; onClicked: Qt.quit() }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "display"

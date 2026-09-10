@@ -5,7 +5,7 @@ import qs.Ui
 
 BarWidget {
     id: root
-    moduleName: "chaumarchy.wallet"
+    moduleName: "cashu-me.wallet"
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
     BarIconButton {
@@ -13,7 +13,7 @@ BarWidget {
         anchors.fill: parent
         bar: root.bar
         text: "󰖄"
-        tooltipText: "Chaumarchy · Cashu wallet"
+        tooltipText: "cashu.me · Cashu wallet"
         onPressed: buttonCode => {
             if (launch.running) return
             if (root.bar && root.bar.activePopout) root.bar.activePopout.close()
@@ -23,7 +23,7 @@ BarWidget {
             var host = root.QsWindow.window
             var output = host ? host.screen.name : ""
             var originX = host ? Math.round(button.mapToItem(host.contentItem, button.width / 2, 0).x) : -1
-            launch.command = [Quickshell.env("HOME") + "/.local/bin/chaumarchy",
+            launch.command = [Quickshell.env("HOME") + "/.local/bin/cashu-me",
                               buttonCode === Qt.RightButton ? "--window" : "--toggle", output, String(originX)]
             launch.running = true
         }
