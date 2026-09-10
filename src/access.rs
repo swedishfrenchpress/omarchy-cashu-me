@@ -153,6 +153,16 @@ impl Access {
             .map_err(|_| "Password enabled; restart to finish removing the device key.")?;
         self.flush()
     }
+    /// Part of deleting the wallet: both the device key and the password
+    /// vault go, since neither protects anything once the database is gone.
+    pub fn delete(&self) -> Result<()> {
+        for path in [self.device(), self.vault()] {
+            if path.exists() {
+                fs::remove_file(&path).map_err(|_| "Could not delete the wallet's key files.")?;
+            }
+        }
+        self.flush()
+    }
     pub fn disable(&self, key: &str, password: &str) -> Result<()> {
         if self.unlock_key(password)?.as_str() != key {
             return Err("Incorrect wallet password.");

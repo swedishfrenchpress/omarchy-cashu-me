@@ -1,5 +1,7 @@
 mod access;
 mod diagnostics;
+mod lightning;
+mod locked;
 mod payments;
 mod rates;
 mod wallet;
@@ -22,10 +24,6 @@ struct Request {
     #[serde(default)]
     url: String,
     #[serde(default)]
-    path: String,
-    #[serde(default)]
-    backup_password: String,
-    #[serde(default)]
     amount: String,
     #[serde(default)]
     text: String,
@@ -41,12 +39,31 @@ struct Request {
     bitcoin_symbol: bool,
     #[serde(default)]
     fiat_currency: String,
+    // Settings toggles and the Locked Ecash key fields. Booleans default
+    // to false, so a settings request always sends every toggle it covers.
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    auto_claim: bool,
+    #[serde(default)]
+    check_incoming: bool,
+    #[serde(default)]
+    repeat_checks: bool,
+    #[serde(default)]
+    check_sent: bool,
+    #[serde(default)]
+    auto_paste: bool,
+    #[serde(default)]
+    key_id: String,
+    #[serde(default)]
+    nickname: String,
+    #[serde(default)]
+    lock_to: String,
 }
 
 impl Drop for Request {
     fn drop(&mut self) {
         self.password.zeroize();
-        self.backup_password.zeroize();
         self.phrase.zeroize();
         self.text.zeroize();
     }
@@ -54,9 +71,12 @@ impl Drop for Request {
 
 fn emit(mut value: Value) {
     use base64::Engine;
+    // A QR renders for whatever the result asks to share: a token, an
+    // invoice, or any text the interface wants shown as a code.
     let share_text = value["result"]["token"]
         .as_str()
-        .or(value["result"]["invoice"].as_str());
+        .or(value["result"]["invoice"].as_str())
+        .or(value["result"]["qr_text"].as_str());
     if let Some(text) = share_text {
         if let Ok(code) = qrcode::QrCode::new(text.as_bytes()) {
             let svg = code
@@ -123,7 +143,7 @@ async fn main() {
         }
     };
     emit(
-        json!({"event":"state","state":{"unlocked":false,"exists":storage.exists(),"password_required":storage.exists() && access::Access::new(&storage.path).password_required()}}),
+        json!({"event":"state","state":{"unlocked":false,"exists":storage.exists(),"password_required":storage.exists() && access::Access::new(&storage.path).password_required(),"version":env!("CARGO_PKG_VERSION")}}),
     );
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Zeroizing<String>>(8);
     std::thread::spawn(move || {
@@ -171,7 +191,7 @@ async fn main() {
                     Err(_) => { emit(json!({"id":null,"error":"Invalid wallet request."})); continue; }
                 };
                 if ["send_ecash", "pay_invoice", "receive_token", "reclaim_token"].contains(&request.method.as_str()) {
-                    if let Some(session) = &session {
+                    if let Some(session) = session.as_mut() {
                         let (id, result) = payments::run(session, &request, &mut receiver).await;
                         match result {
                             Ok(value) => emit(json!({"id":id,"result":value,"review_done":true})),
@@ -182,7 +202,6 @@ async fn main() {
                     continue;
                 }
                 let password = Zeroizing::new(std::mem::take(&mut request.password));
-                let backup_password = Zeroizing::new(std::mem::take(&mut request.backup_password));
                 let phrase = Zeroizing::new(std::mem::take(&mut request.phrase));
                 let result: wallet::Result<Value> = match request.method.as_str() {
                     "create" | "unlock" => {
@@ -197,24 +216,27 @@ async fn main() {
                         }
                     }
                     "lock" => break, // Process termination discards CDK pools and their password copies.
-                    "restore_backup" => {
-                        if session.is_some() { Err("Lock the wallet before restoring.") }
-                        else {
-                            match Session::import_backup(&storage, std::path::Path::new(&request.path), &backup_password, &password).await {
-                                Ok(opened) => { session = Some(opened); ticker.reset_immediately(); Ok(json!({})) },
-                                Err(error) => Err(error)
-                            }
-                        }
-                    }
+                    "validate_phrase" => Session::validate_phrase(&phrase).map(|_| json!({"phrase_valid":true})),
                     "restore_phrase" => {
-                        if session.is_some() { Err("Lock the wallet before restoring.") }
+                        if session.is_some() { Err("Delete the current wallet before restoring.") }
                         else {
                             match Session::restore_phrase(&storage, &password, &phrase, &request.mint_urls).await {
-                                Ok(opened) => { session = Some(opened); ticker.reset_immediately(); Ok(json!({})) },
+                                Ok(opened) => { session = Some(opened); Ok(json!({})) },
                                 Err(error) => Err(error)
                             }
                         }
                     }
+                    "restore_mint" => match session.as_mut() {
+                        Some(session) => session.restore_mint(&request.url).await,
+                        None => Err("Unlock the wallet first.")
+                    },
+                    // Settings → Danger → Delete Wallet. The session is consumed so
+                    // every database handle closes before the files go; the
+                    // interface then returns to onboarding.
+                    "delete_wallet" => match session.take() {
+                        Some(open) => open.delete(&storage).map(|_| json!({"wallet_deleted":true})),
+                        None => Err("Unlock the wallet first.")
+                    },
                     "set_password" => match session.as_mut() {
                         Some(session) => session.set_password(&password).map(|_| json!({"security_updated":true})),
                         None => Err("Open the wallet first.")
@@ -224,11 +246,57 @@ async fn main() {
                         None => Err("Open the wallet first.")
                     },
                     "recovery_phrase" => match &session {
-                        Some(session) => Ok(session.recovery_phrase()),
+                        Some(session) => session.recovery_phrase(&password),
                         None => Err("Unlock the wallet first.")
                     },
-                    "export_backup" => match &session {
-                        Some(session) => session.export_backup(std::path::Path::new(&request.path), &password).map(|_| json!({"backup_saved":true})),
+                    "set_privacy" => match session.as_mut() {
+                        Some(session) => session.set_privacy(wallet::Privacy {
+                            check_incoming: request.check_incoming, repeat_checks: request.repeat_checks,
+                            check_sent: request.check_sent, auto_paste: request.auto_paste,
+                        }).await.map(|_| json!({})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "refresh_rate" => match session.as_mut() {
+                        Some(session) => session.refresh_rate_now().await.map(|_| json!({})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "set_lightning" => match session.as_mut() {
+                        Some(session) => {
+                            let mint = if request.url.trim().is_empty() { None } else { Some(request.url.clone()) };
+                            session.set_lightning(request.enabled, request.auto_claim, mint).await.map(|_| json!({}))
+                        },
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "check_lightning" => match session.as_mut() {
+                        Some(session) => session.claim_lightning().await,
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "set_quick_lock" => match session.as_mut() {
+                        Some(session) => session.set_quick_lock(request.enabled).map(|_| json!({})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "generate_key" => match session.as_mut() {
+                        Some(session) => session.generate_device_key(),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "import_key" => match session.as_mut() {
+                        Some(session) => session.import_device_key(&request.text),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "rename_key" => match session.as_mut() {
+                        Some(session) => session.rename_device_key(&request.key_id, &request.nickname).map(|_| json!({})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "remove_key" => match session.as_mut() {
+                        Some(session) => session.remove_device_key(&request.key_id).map(|_| json!({"key_removed":true})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "reveal_key" => match &session {
+                        Some(session) => session.reveal_key(&request.key_id, &password),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "locked_request" => match &session {
+                        Some(session) => session.locked_request(&request.key_id),
                         None => Err("Unlock the wallet first.")
                     },
                     "create_invoice" => match &session {
@@ -244,7 +312,7 @@ async fn main() {
                         None => Err("Unlock the wallet first.")
                     },
                     "sync" => match session.as_mut() {
-                        Some(session) => { session.reconcile().await; Ok(json!({})) },
+                        Some(session) => { session.reconcile(false).await; Ok(json!({})) },
                         None => Err("Unlock the wallet first.")
                     },
                     "add_mint" => match session.as_mut() {
@@ -264,22 +332,29 @@ async fn main() {
                         None => Err("Unlock the wallet first.")
                     },
                     "status" => Ok(json!({})),
+                    "make_qr" => Ok(json!({"qr_text": request.text})),
                     _ => Err("This wallet operation is not implemented yet.")
                 };
                 match result {
                     Ok(value) => emit(json!({"id":request.id,"result":value})),
                     Err(error) => emit(json!({"id":request.id,"error":error}))
                 }
-                if let Some(session) = &session {
-                    match session.snapshot().await {
+                match &session {
+                    Some(session) => match session.snapshot().await {
                         Ok(state) => emit(json!({"event":"state","state":state})),
                         Err(error) => emit(json!({"event":"error","error":error}))
-                    }
+                    },
+                    // After a delete the interface needs the locked, wallet-less
+                    // state to return to onboarding.
+                    None if matches!(request.method.as_str(), "delete_wallet" | "status") => emit(
+                        json!({"event":"state","state":{"unlocked":false,"exists":storage.exists(),"password_required":storage.exists() && access::Access::new(&storage.path).password_required()}}),
+                    ),
+                    None => {}
                 }
             }
             _ = ticker.tick(), if session.is_some() => {
                 if let Some(session) = session.as_mut() {
-                    session.reconcile().await;
+                    session.reconcile(true).await;
                     if let Ok(state) = session.snapshot().await { emit(json!({"event":"state","state":state})); }
                 }
             }

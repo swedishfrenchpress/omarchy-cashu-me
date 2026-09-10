@@ -34,7 +34,7 @@ The same reconciliation tick also refreshes the local-currency exchange rate, on
 
 Full backups include operation history, pending state, known mints, counters, and the phrase. Imported copies are quarantined from spending until all their mints finish seed scanning and reconciliation. Scanning discovers recoverable outputs missing from an older backup; spent-proof checks remove stale saved balance. A phrase restore starts from known mint URLs and the same deterministic seed, also requiring reconciliation before spending.
 
-Cashu recovery is mint-dependent. A phrase alone does not recover the mint list, full transaction history, BIP39 passphrases used elsewhere, arbitrary imported secrets, or every pending Lightning operation. Funds at an unavailable or dishonest mint are not guaranteed recoverable. Do not operate multiple restored copies of the same seed concurrently. Losing an encrypted backup's password requires a separately recorded phrase and mint URLs; cashu.me has no password-reset service.
+Cashu recovery is mint-dependent. A phrase alone does not recover the mint list, full transaction history, BIP39 passphrases used elsewhere, arbitrary imported secrets, or every pending Lightning operation. Funds at an unavailable or dishonest mint are not guaranteed recoverable. Do not operate multiple restored copies of the same seed concurrently. cashu.me has no password-reset service.
 
 ## Current limits
 

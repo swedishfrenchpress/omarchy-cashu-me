@@ -20,7 +20,8 @@ CONTROLS = '''
         function unlock(): void { password.text = "temporary native test password"; if (unlockButton.enabled) unlockButton.clicked() }
         function protect(): void {
             app.go("settings")
-            app.go("security")
+            app.go("app_lock")
+            app.appLockMode = "enable"
             securityPassword.text = "temporary native test password"
             securityConfirmation.text = securityPassword.text
             if (enablePasswordButton.enabled) enablePasswordButton.clicked()
@@ -28,7 +29,8 @@ CONTROLS = '''
         function mint(): void { app.go("mints"); app.go("add_mint"); app.mintUrl = "http://127.0.0.1:33381"; if (addMintButton.enabled) addMintButton.clicked() }
         function invoice(): void { app.go("receive"); lightningChoice.clicked(); app.entryText = "64"; if (amountContinue.enabled) amountContinue.clicked() }
         function sync(): void { backend.request("sync") }
-        function phrase(): void { app.go("recovery"); backend.request("recovery_phrase") }
+        // With App Lock on, revealing the words takes the password again.
+        function phrase(): void { app.go("recovery"); revealPassword.text = "temporary native test password"; if (revealButton.enabled) revealButton.clicked() }
         function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.entryText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
         function confirm(): void { if (confirmButton.enabled) confirmButton.clicked() }
         function back(): void { app.back() }
@@ -145,7 +147,7 @@ ShellRoot {
                     call("back"); wait(lambda s: s["page"] == "history")
                     if environment.get("CASHU_ME_TEST_CAPTURE"):
                         capture = Path(environment["CASHU_ME_TEST_CAPTURE"])
-                        for page in ("home", "history", "mints", "send", "send_amount", "receive", "settings", "security"):
+                        for page in ("home", "history", "mints", "send", "send_amount", "receive", "settings", "app_lock"):
                             self.assertEqual(ipc(ui, "test", "navigate", page).returncode, 0)
                             wait(lambda s: s["page"] == page)
                             time.sleep(0.2)

@@ -1,14 +1,9 @@
 import QtQuick
-import QtCore
 import Quickshell
 
+// Reduced motion is no longer a wallet setting, matching the reference
+// wallet, which defers to the system. Omarchy has no such system switch, so
+// the environment variable is the one remaining way to ask for it.
 QtObject {
-    property alias reducedMotion: preferences.reducedMotion
-    readonly property bool reduced: reducedMotion || Quickshell.env("CASHU_ME_REDUCED_MOTION") === "1"
-    property Settings preferences: Settings {
-        id: preferences
-        location: "file://" + (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/cashu-me/appearance.ini"
-        category: "Motion"
-        property bool reducedMotion: false
-    }
+    readonly property bool reduced: Quickshell.env("CASHU_ME_REDUCED_MOTION") === "1"
 }

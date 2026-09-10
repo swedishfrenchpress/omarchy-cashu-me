@@ -72,7 +72,7 @@ class Worker:
 
 
 class WalletIntegration(unittest.TestCase):
-    def test_payments_backup_and_crash_recovery(self):
+    def test_payments_locked_ecash_delete_and_restore(self):
         with urllib.request.urlopen(MINT + "/v1/info", timeout=3) as response:
             info = json.load(response)
         self.assertEqual(info["name"], "cashu.me test mint", "Refusing to test against an unidentified mint")
@@ -97,8 +97,6 @@ class WalletIntegration(unittest.TestCase):
                 time.sleep(2)
                 alice.ok("sync")
                 self.assertEqual(alice.state()["mints"][0]["spendable"], "128")
-                backup = directory / "before-spending.backup"
-                alice.ok("export_backup", path=str(backup), password="temporary backup password")
 
                 review = alice.ok("send_ecash", amount="16")
                 self.assertEqual(review["review"]["amount"], "16")
@@ -111,6 +109,45 @@ class WalletIntegration(unittest.TestCase):
                 self.assertIn("error", bob.call("confirm_payment", review_id=duplicate["review_id"]))
                 self.assertEqual(bob.state()["mints"][0]["spendable"], "16")
                 alice.ok("sync")
+
+                # Locked ecash (NUT-11): a token locked to Bob's seed key is
+                # refused by Alice before any mint call and redeemed by Bob.
+                bob_key = bob.state()["locked"]["seed_key"]
+                self.assertTrue(bob_key.startswith("02") and len(bob_key) == 66)
+                self.assertIn("error", alice.call("send_ecash", amount="4", lock_to="not a key"))
+                review = alice.ok("send_ecash", amount="4", lock_to=bob_key)
+                self.assertEqual(review["review"]["locked_to"], bob_key)
+                locked = alice.ok("confirm_payment", review_id=review["review_id"])
+                self.assertIn("error", alice.call("receive_token", text=locked["token"]))
+                review = bob.ok("receive_token", text=locked["token"])
+                self.assertEqual(review["review"]["locked_to"], "Your key")
+                self.assertEqual(bob.ok("confirm_payment", review_id=review["review_id"])["amount"], "4")
+                # A device key: generated, named, received to, backed up as an
+                # nsec, imported elsewhere, and removed.
+                key_id = bob.ok("generate_key")["key_added"]
+                bob.ok("rename_key", key_id=key_id, nickname="Test key")
+                device = bob.state()["locked"]["device_keys"][0]
+                self.assertEqual((device["id"], device["nickname"], device["used_count"]), (key_id, "Test key", 0))
+                locked = alice.confirm("send_ecash", amount="2", lock_to=device["pubkey"])
+                review = bob.ok("receive_token", text=locked["token"])
+                self.assertEqual(review["review"]["locked_to"], "Test key")
+                bob.ok("confirm_payment", review_id=review["review_id"])
+                self.assertEqual(bob.state()["locked"]["device_keys"][0]["used_count"], 1)
+                self.assertIn("error", bob.call("reveal_key", key_id=key_id, password="incorrect password"))
+                nsec = bob.ok("reveal_key", key_id=key_id, password=PASSWORD)["nsec"]
+                self.assertTrue(nsec.startswith("nsec1"))
+                self.assertIn("error", alice.call("import_key", text="nsec1notakey"))
+                imported = alice.ok("import_key", text=nsec)["key_added"]
+                self.assertEqual(alice.state()["locked"]["device_keys"][0]["pubkey"], device["pubkey"])
+                alice.ok("remove_key", key_id=imported)
+                self.assertEqual(alice.state()["locked"]["device_keys"], [])
+                self.assertEqual(bob.ok("locked_request", key_id="")["pubkey"], bob_key)
+                bob.ok("set_quick_lock", enabled=True)
+                self.assertTrue(bob.state()["locked"]["quick_lock"])
+                # Privacy toggles persist and thin out reconciliation.
+                alice.ok("set_privacy", check_incoming=True, repeat_checks=False, check_sent=True, auto_paste=False)
+                privacy = alice.state()["privacy"]
+                self.assertEqual((privacy["repeat_checks"], privacy["auto_paste"]), (False, False))
 
                 pending = alice.confirm("send_ecash", amount="8")
                 alice.close(kill=True)
@@ -132,7 +169,9 @@ class WalletIntegration(unittest.TestCase):
                 history = alice.state()["history"]
                 self.assertTrue(any(row["kind"] == "Lightning" and row["status"] == "completed" for row in history))
                 expected = alice.state()["mints"][0]["spendable"]
-                phrase = alice.ok("recovery_phrase")["phrase"]
+                # With App Lock on, the words need the password again.
+                self.assertIn("error", alice.call("recovery_phrase", password="incorrect password"))
+                phrase = alice.ok("recovery_phrase", password=PASSWORD)["phrase"]
                 # Termination during review must release the prepared reservation
                 # on recovery, without creating an unconfirmed outgoing token.
                 alice.ok("send_ecash", amount="4")
@@ -142,23 +181,27 @@ class WalletIntegration(unittest.TestCase):
                 alice.ok("sync")
                 self.assertEqual(alice.state()["mints"][0]["spendable"], expected)
                 self.assertEqual(alice.state()["mints"][0]["reserved"], "0")
-                alice.close()
 
-                restored = Worker(directory / "restored"); workers.append(restored)
-                restored.ok("restore_backup", path=str(backup), backup_password="temporary backup password", password=PASSWORD)
-                restored.ok("sync")
-                state = restored.state()
+                # Settings → Danger → Delete Wallet, then the in-app restore:
+                # words validated first, then the wallet installed and each
+                # mint recovered on its own with a per-mint result.
+                self.assertIn("error", alice.call("validate_phrase", phrase="invalid words"))
+                alice.ok("validate_phrase", phrase=phrase)
+                self.assertIn("error", alice.call("restore_phrase", phrase=phrase, mint_urls=[MINT]))
+                alice.ok("delete_wallet")
+                self.assertFalse(alice.state()["exists"])
+                self.assertFalse((directory / "alice" / "wallet.sqlite").exists())
+                self.assertFalse((directory / "alice" / "access.sqlite").exists())
+                alice.ok("restore_phrase", phrase=phrase, mint_urls=[MINT], password="")
+                self.assertTrue(alice.state()["restoring"])
+                result = alice.ok("restore_mint", url=MINT)
+                self.assertEqual(result["recovered"], expected)
+                state = alice.state()
                 self.assertFalse(state["restoring"])
+                self.assertFalse(state["password_required"])
                 self.assertEqual(state["mints"][0]["spendable"], expected)
-                restored.close()
-
-                recovered = Worker(directory / "phrase"); workers.append(recovered)
-                self.assertIn("error", recovered.call("restore_phrase", phrase="invalid words", mint_urls=[MINT], password=PASSWORD))
-                recovered.ok("restore_phrase", phrase=phrase, mint_urls=[MINT], password=PASSWORD)
-                recovered.ok("sync")
-                self.assertFalse(recovered.state()["restoring"])
-                self.assertEqual(recovered.state()["mints"][0]["spendable"], expected)
-                self.assertIn("error", recovered.call("send_ecash", amount="99999999"))
+                self.assertEqual(state["mints"][0]["name"], "cashu.me test mint")
+                self.assertIn("error", alice.call("send_ecash", amount="99999999"))
             finally:
                 for worker in workers:
                     worker.close()

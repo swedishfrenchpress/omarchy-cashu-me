@@ -9,7 +9,7 @@ cashu.me is a native Cashu ecash wallet for Omarchy (a Linux desktop environment
 - **Frontend**: Quickshell/QML using installed Omarchy Commons and Ui modules
 - **Architecture**: Rust worker process communicates with QML frontend via newline-delimited JSON on stdin/stdout
 
-The wallet implements controlled payments (Cashu tokens + BOLT11 Lightning), multiple explicit mints with separate balances, optional password protection, recovery phrases, and encrypted backups.
+The wallet implements controlled payments (Cashu tokens + BOLT11 Lightning), multiple explicit mints with separate balances, optional password protection (App Lock), recovery phrases, in-app restore, a npub.cash Lightning address, locked ecash (NUT-11 P2PK), and privacy controls, with Settings mirroring cashubtc/wallet minus Nostr.
 
 ## Build and Development Commands
 
@@ -90,7 +90,8 @@ The backend is a single long-running worker process controlled by QML through JS
 - Key wrapping via `access.sqlite` vault for optional password protection (see `src/access.rs`)
 - Handles wallet creation, unlock, recovery phrase generation, and mint management
 - Mint reconciliation (checks pending operations, unissued quotes, spent proofs every 30 seconds)
-- Backup export/import with independent encryption
+- Settings model persisted in the `chaumarchy_meta` settings JSON: display, privacy, Lightning address, locked-ecash device keys
+- `delete()` removes every wallet file; `validate_phrase` / `restore_phrase` / `restore_mint` drive the in-app restore mint by mint; `reconcile(periodic)` thins its steps by the Privacy settings
 
 **src/payments.rs** — Token and Lightning payment operations:
 - Ecash send/receive using CDK's persisted operation record
@@ -98,6 +99,10 @@ The backend is a single long-running worker process controlled by QML through JS
 - Duplicate token rejection and insufficient-funds validation
 - Review state expires after 5 minutes; cancellation releases prepared operations
 - Timeout handling defers to reconciliation rather than retry loops
+
+**src/lightning.rs** — Settings → Payments → Lightning: an npub.cash Lightning address through CDK's `npubcash` feature (NIP-06 key from the seed, `<npub>@npubx.cash`, quotes minted at the receiving mint). Re-registers after every unlock; auto-claim runs from reconciliation at most every two minutes.
+
+**src/locked.rs** — Settings → Payments → Locked Ecash: the seed key (the same NIP-06 key, written `02` + x-only like the reference), device keys generated or imported from an nsec and stored in the encrypted settings, signing keys for receive, the recipient-key parser, and the pre-flight gate that refuses a token locked to a key the wallet doesn't hold.
 
 **src/diagnostics.rs** — Opt-in error diagnostics:
 - Off unless `CASHU_ME_LOG` names a file; appends the failing operation and the underlying library message, bounded per line, created 0600
@@ -134,9 +139,7 @@ Single-threaded event loop manages all UI state and coordinates with the Rust ba
 
 **ui/ClockFormat.js** — Formats dates per Omarchy's `shell.json` setting (excludes year)
 
-**ui/MotionPreferences.qml, Motion.js** — Manages `reduceMotion` setting:
-- Respects user's accessibility preference
-- Controls whether transitions use movement or opacity-only fades
+**ui/MotionPreferences.qml, Motion.js** — Reduced motion comes only from `CASHU_ME_REDUCED_MOTION=1`; there is no in-app setting, matching the reference wallet
 
 ### Communication Protocol
 
@@ -150,7 +153,10 @@ QML sends JSON objects to Rust via stdin with these fields:
   "amount": "...",
   "text": "...",
   "phrase": "...",
-  "mint_urls": ["..."]
+  "mint_urls": ["..."],
+  "lock_to": "02…", "key_id": "...", "nickname": "...",
+  "enabled": true, "auto_claim": true,
+  "check_incoming": true, "repeat_checks": true, "check_sent": true, "auto_paste": true
 }
 ```
 
@@ -226,7 +232,7 @@ See `docs/ux-reference.md` for mapping between Cashubtc/Wallet flows and cashu.m
 - Real Lightning routing and network-failure injection are not yet tested
 - Cashu.me interoperability and wallet migration remain in progress
 - Physical camera input, screen-region scanning, and broad Omarchy-version compatibility need verification
-- No password-reset service; losing an encrypted backup's password requires a separately recorded phrase and mint URLs
+- The Lightning address depends on npubx.cash being reachable; it is not exercised by the fake-mint tests
 - Long-term recovery workloads (very old backups, many operations) are not yet benchmarked
 
 See `PLAN.md` for detailed progress tracking and `docs/testing.md` for validation scope.

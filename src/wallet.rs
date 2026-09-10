@@ -30,13 +30,117 @@ pub struct Mint {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct Settings {
-    mints: Vec<Mint>,
-    selected: Option<String>,
+pub(crate) struct Settings {
+    pub(crate) mints: Vec<Mint>,
+    pub(crate) selected: Option<String>,
     #[serde(default)]
-    needs_restore: bool,
+    pub(crate) needs_restore: bool,
     #[serde(default)]
-    display: Display,
+    pub(crate) display: Display,
+    #[serde(default)]
+    pub(crate) privacy: Privacy,
+    #[serde(default)]
+    pub(crate) lightning: LightningAddress,
+    #[serde(default)]
+    pub(crate) locked: Locked,
+}
+
+/// Settings → Privacy, after cashubtc/wallet. Each one only decides which
+/// mint calls the wallet makes on its own; nothing here changes an amount.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Privacy {
+    /// Look for paid invoices and Lightning-address payments on every
+    /// reconciliation. Off, incoming payments are found only on Refresh.
+    #[serde(default = "yes")]
+    pub check_incoming: bool,
+    /// Keep reconciling every 30 s while the wallet is open. Off, the wallet
+    /// reconciles once on unlock and then only on Refresh.
+    #[serde(default = "yes")]
+    pub repeat_checks: bool,
+    /// Ask mints whether sent ecash was claimed. Off, sent tokens stay
+    /// pending until Refresh or a reclaim.
+    #[serde(default = "yes")]
+    pub check_sent: bool,
+    /// Read a Cashu token from the clipboard when the receive page opens.
+    /// Handled by the interface; stored here so it survives like the rest.
+    #[serde(default = "yes")]
+    pub auto_paste: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Privacy {
+    fn default() -> Self {
+        Self {
+            check_incoming: true,
+            repeat_checks: true,
+            check_sent: true,
+            auto_paste: true,
+        }
+    }
+}
+
+/// Settings → Payments → Lightning: an npub.cash Lightning address whose
+/// payments are minted as ecash at the chosen mint. CDK owns the protocol;
+/// this records the choice so it survives a restart.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LightningAddress {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "yes")]
+    pub auto_claim: bool,
+    #[serde(default)]
+    pub mint: Option<String>,
+    #[serde(default)]
+    pub last_checked: Option<u64>,
+}
+
+impl Default for LightningAddress {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_claim: true,
+            mint: None,
+            last_checked: None,
+        }
+    }
+}
+
+/// Settings → Payments → Locked Ecash. The seed key is derived, never
+/// stored. Device keys live only in this encrypted database, like the
+/// reference wallet's device-only keys live only in its keychain.
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Locked {
+    #[serde(default)]
+    pub quick_lock: bool,
+    #[serde(default)]
+    pub device_keys: Vec<DeviceKey>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DeviceKey {
+    pub id: String,
+    pub nickname: String,
+    pub pubkey: String,
+    pub secret: String,
+    #[serde(default)]
+    pub used_count: u64,
+}
+
+impl Drop for DeviceKey {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.secret.zeroize();
+    }
+}
+
+pub(crate) fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
 }
 
 /// Presentation-only preferences. Neither field changes what unit any
@@ -89,11 +193,15 @@ impl Storage {
 
 pub struct Session {
     metadata: Connection,
-    mnemonic: Mnemonic,
+    pub(crate) mnemonic: Mnemonic,
     db: Arc<WalletSqliteDatabase>,
-    settings: Settings,
-    wallets: BTreeMap<String, Wallet>,
+    pub(crate) settings: Settings,
+    pub(crate) wallets: BTreeMap<String, Wallet>,
     sync_status: BTreeMap<String, &'static str>,
+    // Mints whose NUT-13 restore has completed since this session opened,
+    // so a restore driven mint by mint from the interface knows when the
+    // whole wallet is recovered.
+    restored: std::collections::BTreeSet<String>,
     access: Access,
     data_key: Zeroizing<String>,
     password_required: bool,
@@ -101,6 +209,11 @@ pub struct Session {
     // sats, not to a figure written before the last restart.
     rates: BTreeMap<String, f64>,
     rates_fetched_at: Option<std::time::Instant>,
+    rates_fetched_unix: Option<u64>,
+    // The Lightning address is re-registered with npub.cash after every
+    // unlock; until that succeeds the interface shows it as connecting.
+    pub(crate) lightning_ready: bool,
+    pub(crate) lightning_error: Option<&'static str>,
 }
 
 pub(crate) fn encrypted_connection(path: &Path, password: &str) -> Result<Connection> {
@@ -119,12 +232,14 @@ pub(crate) fn encrypted_connection(path: &Path, password: &str) -> Result<Connec
     connection
         .pragma_update(None, "key", password)
         .map_err(|_| "Cannot initialize encryption.")?;
+    // With the wrong key, SQLCipher fails on the first statement that touches
+    // the file, which may be one of these pragmas; report it as the password.
     connection
         .pragma_update(None, "temp_store", "MEMORY")
-        .map_err(|_| "Cannot protect temporary storage.")?;
+        .map_err(|_| "Incorrect password or damaged wallet file.")?;
     connection
         .pragma_update(None, "synchronous", "FULL")
-        .map_err(|_| "Cannot configure durable storage.")?;
+        .map_err(|_| "Incorrect password or damaged wallet file.")?;
     connection
         .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
             row.get::<_, i64>(0)
@@ -140,14 +255,23 @@ impl Session {
         Self::initialize(storage, password, mnemonic, Settings::default()).await
     }
 
+    /// The restore flow validates the words before it touches the current
+    /// wallet, so a typo never costs anyone the wallet they have.
+    pub fn validate_phrase(phrase: &str) -> Result<()> {
+        Mnemonic::parse(phrase.trim())
+            .map(|_| ())
+            .map_err(|_| "That seed phrase doesn't look right. Check the spelling and try again.")
+    }
+
     pub async fn restore_phrase(
         storage: &Storage,
         password: &str,
         phrase: &str,
         urls: &[String],
     ) -> Result<Self> {
-        let mnemonic =
-            Mnemonic::parse(phrase).map_err(|_| "Check your recovery words and their order.")?;
+        let mnemonic = Mnemonic::parse(phrase.trim()).map_err(|_| {
+            "That seed phrase doesn't look right. Check the spelling and try again."
+        })?;
         if urls.is_empty() {
             return Err("Enter the mint URLs used with this recovery phrase.");
         }
@@ -242,11 +366,15 @@ impl Session {
             settings,
             wallets: BTreeMap::new(),
             sync_status: BTreeMap::new(),
+            restored: std::collections::BTreeSet::new(),
             password_required: access.password_required(),
             access,
             data_key: key,
             rates: BTreeMap::new(),
             rates_fetched_at: None,
+            rates_fetched_unix: None,
+            lightning_ready: false,
+            lightning_error: None,
         };
         for mint in &session.settings.mints {
             session
@@ -262,7 +390,7 @@ impl Session {
             .map_err(|_| "Cannot initialize this mint's wallet.")
     }
 
-    fn save_settings(&self) -> Result<()> {
+    pub(crate) fn save_settings(&self) -> Result<()> {
         let value =
             serde_json::to_string(&self.settings).map_err(|_| "Cannot encode wallet settings.")?;
         self.metadata
@@ -306,21 +434,8 @@ impl Session {
                 "This mint does not advertise the restoration support required by cashu.me.",
             );
         }
-        // The name is mint-controlled and is rendered by shared Omarchy
-        // components whose text format is not ours to pin, so keep it printable
-        // and free of the delimiters that turn a label into rich text.
-        let name: String = info["name"]
-            .as_str()
-            .unwrap_or_default()
-            .chars()
-            .filter(|character| !character.is_control() && !matches!(character, '<' | '>'))
-            .take(100)
-            .collect();
-        let name = if name.trim().is_empty() {
-            url.clone()
-        } else {
-            name
-        };
+        let name = clean_mint_name(info["name"].as_str().unwrap_or_default());
+        let name = if name.is_empty() { url.clone() } else { name };
         self.settings.mints.push(Mint {
             url: url.clone(),
             name,
@@ -402,15 +517,103 @@ impl Session {
         }
         self.rates_fetched_at = Some(std::time::Instant::now());
         match rates::fetch_rates().await {
-            Ok(fetched) => self.rates = fetched,
+            Ok(fetched) => {
+                self.rates = fetched;
+                self.rates_fetched_unix = Some(now());
+            }
             Err(error) => note("fetch_rates", &error),
         }
     }
 
-    pub async fn reconcile(&mut self) {
+    /// The Currency page's refresh button: fetch now, whatever the age.
+    pub async fn refresh_rate_now(&mut self) -> Result<()> {
+        if self.settings.display.fiat_currency.is_none() {
+            return Err("Choose a currency first.");
+        }
+        self.rates_fetched_at = None;
         self.refresh_rates().await;
+        if self.rates_fetched_unix.is_none() {
+            return Err("Could not fetch the price. Check your connection and try again.");
+        }
+        Ok(())
+    }
+
+    pub async fn set_privacy(&mut self, privacy: Privacy) -> Result<()> {
+        let previous = std::mem::replace(&mut self.settings.privacy, privacy);
+        if let Err(error) = self.save_settings() {
+            self.settings.privacy = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// NUT-13 recovery for one mint, driven from the restore page so it can
+    /// show each mint's result as it settles. Names the mint from its info
+    /// on the way, since a restore starts with nothing but URLs.
+    pub async fn restore_mint(&mut self, url: &str) -> Result<Value> {
+        let url = validate_mint_url(url)?;
+        let wallet = self
+            .wallets
+            .get(&url)
+            .ok_or("This mint is not part of the restore.")?;
+        if let Ok(Ok(Some(info))) =
+            tokio::time::timeout(Duration::from_secs(15), wallet.fetch_mint_info()).await
+        {
+            let name = clean_mint_name(info.name.as_deref().unwrap_or_default());
+            if !name.is_empty() {
+                if let Some(mint) = self.settings.mints.iter_mut().find(|mint| mint.url == url) {
+                    mint.name = name;
+                }
+            }
+        }
+        let wallet = self
+            .wallets
+            .get(&url)
+            .ok_or("This mint is not part of the restore.")?;
+        let restored = match tokio::time::timeout(Duration::from_secs(180), wallet.restore()).await
+        {
+            Err(_) => return Err("This mint did not finish restoring in time. Retry."),
+            Ok(Err(error)) => {
+                note(&format!("{url} restore"), &error);
+                return Err(
+                    "This mint could not be restored. Check that it is reachable and retry.",
+                );
+            }
+            Ok(Ok(restored)) => restored,
+        };
+        self.restored.insert(url.clone());
+        self.sync_status.insert(url.clone(), "synced");
+        if self.settings.needs_restore
+            && self
+                .settings
+                .mints
+                .iter()
+                .all(|mint| self.restored.contains(&mint.url))
+        {
+            self.settings.needs_restore = false;
+        }
+        self.save_settings()?;
+        Ok(
+            json!({"mint": url, "recovered": restored.unspent.to_string(),
+            "pending": restored.pending.to_string(), "spent": restored.spent.to_string()}),
+        )
+    }
+
+    /// `periodic` is the 30 s tick, which the Privacy settings can thin
+    /// out; an explicit Refresh or unlock always runs every step.
+    pub async fn reconcile(&mut self, periodic: bool) {
+        let privacy = self.settings.privacy.clone();
+        if periodic && !privacy.repeat_checks {
+            return;
+        }
+        self.refresh_rates().await;
+        if self.settings.lightning.enabled && !self.lightning_ready {
+            self.connect_lightning().await;
+        }
         let mut restored_all = true;
         let needs_restore = self.settings.needs_restore;
+        let check_incoming = !periodic || privacy.check_incoming;
+        let check_sent = !periodic || privacy.check_sent;
         for (url, wallet) in &self.wallets {
             let outcome = tokio::time::timeout(
                 Duration::from_secs(if needs_restore { 180 } else { 20 }),
@@ -437,29 +640,33 @@ impl Session {
                             synced = false;
                         }
                     }
-                    synced &= logged(
-                        &format!("{url} mint_unissued_quotes"),
-                        wallet.mint_unissued_quotes().await,
-                    );
+                    if check_incoming {
+                        synced &= logged(
+                            &format!("{url} mint_unissued_quotes"),
+                            wallet.mint_unissued_quotes().await,
+                        );
+                    }
                     synced &= logged(
                         &format!("{url} finalize_pending_melts"),
                         wallet.finalize_pending_melts().await,
                     );
-                    synced &= logged(
-                        &format!("{url} check_all_pending_proofs"),
-                        wallet.check_all_pending_proofs().await,
-                    );
-                    match wallet.get_unspent_proofs().await {
-                        Ok(proofs) if !proofs.is_empty() => {
-                            synced &= logged(
-                                &format!("{url} check_proofs_spent"),
-                                wallet.check_proofs_spent(proofs).await,
-                            );
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            note(&format!("{url} get_unspent_proofs"), &error);
-                            synced = false;
+                    if check_sent {
+                        synced &= logged(
+                            &format!("{url} check_all_pending_proofs"),
+                            wallet.check_all_pending_proofs().await,
+                        );
+                        match wallet.get_unspent_proofs().await {
+                            Ok(proofs) if !proofs.is_empty() => {
+                                synced &= logged(
+                                    &format!("{url} check_proofs_spent"),
+                                    wallet.check_proofs_spent(proofs).await,
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                note(&format!("{url} get_unspent_proofs"), &error);
+                                synced = false;
+                            }
                         }
                     }
                     synced
@@ -477,6 +684,43 @@ impl Session {
                 self.settings.needs_restore = true;
             }
         }
+        // The reference wallet polls npub.cash every two minutes; a Refresh
+        // always asks, the tick only when that long has passed.
+        let due = self
+            .settings
+            .lightning
+            .last_checked
+            .is_none_or(|checked| now().saturating_sub(checked) >= 110);
+        if check_incoming
+            && self.settings.lightning.enabled
+            && self.settings.lightning.auto_claim
+            && (!periodic || due)
+        {
+            let _ = self.claim_lightning().await;
+        }
+    }
+
+    /// Removes every file the wallet owns. The session is consumed first so
+    /// no open connection outlives its database. Backups a user exported
+    /// are theirs and are left alone.
+    pub fn delete(self, storage: &Storage) -> Result<()> {
+        let access = Access::new(&storage.path);
+        drop(self);
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut name = storage
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("wallet.sqlite")
+                .to_owned();
+            name.push_str(suffix);
+            let path = storage.path.with_file_name(name);
+            if path.exists() {
+                fs::remove_file(&path).map_err(|_| "Could not delete the wallet database.")?;
+            }
+        }
+        access.delete()?;
+        Ok(())
     }
 
     pub async fn snapshot(&self) -> Result<Value> {
@@ -577,15 +821,18 @@ impl Session {
             .fiat_currency
             .as_deref()
             .and_then(|currency| {
-                self.rates
-                    .get(currency)
-                    .map(|rate| json!({"currency": currency, "rate": rate}))
+                self.rates.get(currency).map(|rate| {
+                    json!({"currency": currency, "rate": rate, "fetched_at": self.rates_fetched_unix})
+                })
             });
         Ok(
             json!({"unlocked":true,"exists":true,"mints":mints,"selected":self.settings.selected,
             "password_required":self.password_required,"history":history,"pending_sends":pending_sends,"pending_invoices":pending_invoices,"issued_invoices":issued_invoices,"restoring":self.settings.needs_restore,
             "display":{"bitcoin_symbol":self.settings.display.bitcoin_symbol,"fiat_currency":self.settings.display.fiat_currency},
-            "currencies":rates::catalog(),"exchange_rate":exchange_rate}),
+            "currencies":rates::catalog(),"exchange_rate":exchange_rate,
+            "privacy":self.settings.privacy,"version":env!("CARGO_PKG_VERSION"),
+            "lightning":self.lightning_state(),
+            "locked":self.locked_state()}),
         )
     }
 
@@ -693,39 +940,38 @@ impl Session {
         result
     }
 
-    pub fn recovery_phrase(&self) -> Value {
-        json!({"phrase": self.mnemonic.to_string(), "mints": self.settings.mints})
+    /// With App Lock on, revealing the words asks for the password again, as
+    /// the reference wallet re-authenticates before showing a seed.
+    pub fn recovery_phrase(&self, password: &str) -> Result<Value> {
+        self.confirm_password(password)?;
+        Ok(json!({"phrase": self.mnemonic.to_string(), "mints": self.settings.mints}))
     }
 
-    pub fn export_backup(&self, destination: &Path, password: &str) -> Result<()> {
-        export_encrypted(&self.metadata, destination, password)
+    /// A no-op without App Lock, where there is nothing to check against.
+    pub fn confirm_password(&self, password: &str) -> Result<()> {
+        if !self.password_required {
+            return Ok(());
+        }
+        if password.is_empty() {
+            return Err("Enter your wallet password.");
+        }
+        if self.access.unlock_key(password)?.as_str() != self.data_key.as_str() {
+            return Err("Incorrect wallet password.");
+        }
+        Ok(())
     }
+}
 
-    pub async fn import_backup(
-        storage: &Storage,
-        source: &Path,
-        backup_password: &str,
-        new_password: &str,
-    ) -> Result<Self> {
-        if storage.exists() {
-            return Err("Restore into a new wallet; an existing wallet will not be overwritten.");
-        }
-        let backup = encrypted_connection(source, backup_password)?;
-        let (version, phrase): (i64, String) = backup
-            .query_row(
-                "SELECT version,mnemonic FROM chaumarchy_meta WHERE id=1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|_| "This is not a cashu.me backup.")?;
-        let phrase = Zeroizing::new(phrase);
-        if version != 1 || Mnemonic::parse(phrase.as_str()).is_err() {
-            return Err("Unsupported or damaged backup.");
-        }
-        let key = Access::new(&storage.path).creation_key(new_password)?;
-        export_encrypted(&backup, &storage.path, &key)?;
-        Self::open(storage, new_password).await
-    }
+/// A mint's name is mint-controlled and is rendered by shared Omarchy
+/// components whose text format is not ours to pin, so keep it printable
+/// and free of the delimiters that turn a label into rich text.
+pub(crate) fn clean_mint_name(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .filter(|character| !character.is_control() && !matches!(character, '<' | '>'))
+        .take(100)
+        .collect();
+    name.trim().to_owned()
 }
 
 pub fn parse_amount(input: &str) -> Result<Amount> {
@@ -737,77 +983,6 @@ pub fn parse_amount(input: &str) -> Result<Amount> {
         return Err("Enter a valid positive amount in sats.");
     }
     Ok(Amount::from(amount))
-}
-
-fn export_encrypted(connection: &Connection, destination: &Path, password: &str) -> Result<()> {
-    if !destination.is_absolute() {
-        return Err("Choose an absolute backup file path.");
-    }
-    if password.chars().count() < 12 {
-        return Err("Use a backup password of at least 12 characters.");
-    }
-    let parent = destination.parent().ok_or("Choose a backup directory.")?;
-    // Publish only a complete, durable file. Restoration is already marked in
-    // its encrypted metadata before publication, including after interruption.
-    let file = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|_| "Cannot create a private backup file.")?;
-    let path = file.path().to_str().ok_or("Unsupported file path.")?;
-    let exported: Result<()> = (|| {
-        connection
-            .execute(
-                "ATTACH DATABASE ?1 AS chaumarchy_backup KEY ?2",
-                params![path, password],
-            )
-            .map_err(|_| "Cannot create the encrypted backup.")?;
-        let result = connection
-            .query_row("SELECT sqlcipher_export('chaumarchy_backup')", [], |_| {
-                Ok(())
-            })
-            .map_err(|error| {
-                #[cfg(test)]
-                eprintln!("SQLCipher export test failure: {error}");
-                #[cfg(not(test))]
-                let _ = error;
-                "Cannot export the encrypted backup."
-            })
-            .and_then(|_| {
-                let raw: String = connection
-                    .query_row(
-                        "SELECT settings FROM chaumarchy_backup.chaumarchy_meta WHERE id=1",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .map_err(|_| "Cannot read backup settings.")?;
-                let mut settings: Settings =
-                    serde_json::from_str(&raw).map_err(|_| "Invalid backup settings.")?;
-                settings.needs_restore = true;
-                let encoded = serde_json::to_string(&settings)
-                    .map_err(|_| "Cannot encode backup settings.")?;
-                connection
-                    .execute(
-                        "UPDATE chaumarchy_backup.chaumarchy_meta SET settings=?1 WHERE id=1",
-                        [encoded],
-                    )
-                    .map_err(|_| "Cannot mark backup for recovery.")?;
-                Ok(())
-            });
-        let detached = connection
-            .execute_batch("DETACH DATABASE chaumarchy_backup")
-            .map_err(|_| "Cannot finish the encrypted backup.");
-        result?;
-        detached?;
-        file.as_file()
-            .sync_all()
-            .map_err(|_| "Cannot flush the backup to disk.")?;
-        Ok(())
-    })();
-    exported?;
-    file.persist_noclobber(destination)
-        .map_err(|_| "Choose a new file; backups never overwrite an existing file.")?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| "Cannot flush the backup directory.")?;
-    Ok(())
 }
 
 pub fn validate_mint_url(input: &str) -> Result<String> {
@@ -892,55 +1067,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backup_has_its_own_password_and_never_overwrites() {
-        let temp = tempfile::tempdir().unwrap();
-        let original = Storage::new(&temp.path().join("original")).unwrap();
-        let session = Session::create(&original, "original password 123")
-            .await
-            .unwrap();
-        let phrase = session.mnemonic.to_string();
-        let backup_path = temp.path().join("wallet.backup");
-        session
-            .export_backup(&backup_path, "backup password 456")
-            .unwrap();
-        assert!(!session.settings.needs_restore);
-        let backup = encrypted_connection(&backup_path, "backup password 456").unwrap();
-        let raw: String = backup
-            .query_row("SELECT settings FROM chaumarchy_meta", [], |row| row.get(0))
-            .unwrap();
-        assert!(
-            serde_json::from_str::<Settings>(&raw)
-                .unwrap()
-                .needs_restore
-        );
-        drop(backup);
-        assert!(session
-            .export_backup(&backup_path, "different password")
-            .is_err());
-        assert!(encrypted_connection(&backup_path, "original password 123").is_err());
-        let restored = Storage::new(&temp.path().join("restored")).unwrap();
-        let restored_session = Session::import_backup(
-            &restored,
-            &backup_path,
-            "backup password 456",
-            "restored password 789",
-        )
-        .await
-        .unwrap();
-        assert_eq!(restored_session.mnemonic.to_string(), phrase);
-        assert!(restored_session.settings.needs_restore);
-        assert!(restored_session.selected_wallet().is_err());
-        assert!(Session::import_backup(
-            &original,
-            &backup_path,
-            "backup password 456",
-            "restored password 789"
-        )
-        .await
-        .is_err());
-    }
-
-    #[tokio::test]
     async fn optional_password_preserves_wallet_across_security_changes() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::new(temp.path()).unwrap();
@@ -988,33 +1114,7 @@ mod tests {
                 & 0o777,
             0o600
         );
-        let backup = temp.path().join("export.backup");
-        session
-            .export_backup(&backup, "export password 123")
-            .unwrap();
-        let restored = Storage::new(&temp.path().join("restored")).unwrap();
-        let session = Session::import_backup(&restored, &backup, "export password 123", "")
-            .await
-            .unwrap();
-        assert_eq!(session.mnemonic.to_string(), phrase);
         assert!(!session.password_required);
-    }
-
-    #[tokio::test]
-    async fn corrupted_backup_does_not_create_a_wallet() {
-        let temp = tempfile::tempdir().unwrap();
-        let storage = Storage::new(&temp.path().join("destination")).unwrap();
-        let source = temp.path().join("damaged.backup");
-        fs::write(&source, b"not an encrypted wallet").unwrap();
-        assert!(Session::import_backup(
-            &storage,
-            &source,
-            "backup password 123",
-            "wallet password 456"
-        )
-        .await
-        .is_err());
-        assert!(!storage.exists());
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@ name = "cashu-me-wallet"
 path = "src/main.rs"
 
 [dependencies]
-cdk = { version = "=0.18.0", default-features = false, features = ["wallet"] }
+cdk = { version = "=0.18.0", default-features = false, features = ["wallet", "npubcash"] }
 cdk-sqlite = { version = "=0.18.0", default-features = false, features = ["wallet", "sqlcipher"] }
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher", "backup"] }
 bip39 = { version = "2", features = ["rand", "zeroize"] }
@@ -20,6 +20,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 zeroize = "1"
+# Only for the npub and nsec encodings of keys CDK already derives; the
+# crate is compiled in through cdk's npubcash feature regardless.
+nostr-sdk = { version = "0.44", default-features = false }
 url = "2"
 fs2 = "0.4"
 libc = "0.2"

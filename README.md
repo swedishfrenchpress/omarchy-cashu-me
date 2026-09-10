@@ -25,9 +25,9 @@ cashu-me --quit
 
 Click the wallet icon to open a compact panel on that monitor. Click outside, press Escape, or use × to hide it. Use ↗ to expand into a resizable window and ↙ to return to the panel; forms and payment reviews stay intact. Right-click the bar icon, or run `cashu-me --window`, to open the window directly. The icon persists across login; the wallet starts when first opened.
 
-Closing the panel or window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. With password protection enabled, Settings → Lock wallet stops the worker; Settings → Quit or Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
+Closing the panel or window keeps the unlocked wallet monitoring payments every 30 seconds. Launch again to reopen it. Ctrl+Q exits the app. Desktop locking stops the worker too. Payments reconcile after reopening. Without a wallet password, opening and desktop unlock reopen the wallet automatically; protected wallets ask for their password. Monitoring requires the app to be running and unlocked; it does not continue through logout, suspend, or reboot.
 
-Settings → **Reduce motion** switches to gentle fades without movement. Motion choices and validation are documented in [the motion guide](docs/motion.md).
+Motion choices and validation are documented in [the motion guide](docs/motion.md); `CASHU_ME_REDUCED_MOTION=1` switches to gentle fades without movement.
 
 Settings → **Display** offers the [BIP-177](https://bips.dev/177/) bitcoin symbol (₿21,000 instead of 21,000 sats) and an optional local currency. With a currency set, every amount shows both units, and tapping the home balance swaps which one is primary. Both are display only: every mint call, and every amount actually held or sent, stays in sats regardless of what is shown.
 
@@ -43,17 +43,27 @@ Balances stay separate by mint. A token from an unfamiliar mint requires explici
 
 Navigation and payment flows follow [cashubtc/wallet](https://github.com/cashubtc/wallet), adapted to Omarchy's native controls. See [the UX mapping](docs/ux-reference.md). Use Ctrl+1/2/3 for Wallet/History/Mints, Ctrl+, for Settings, and the back arrow, Escape, or Alt+Left to go back. Settings is the top-left icon on the main pages, where Back appears elsewhere; Scan sits beside the expand control at the top right. Payment confirmation remains explicit.
 
-## Optional password
+## Settings
 
-In Settings → Security, enable a wallet password whenever you want. With it enabled, the wallet requires that password when opened and after desktop lock. Removing it requires the current password.
+Settings follow [cashubtc/wallet](https://github.com/cashubtc/wallet) section for section, without its Nostr integration: **Display** (currency and the ₿ symbol), **Backup & Restore**, **App Lock**, **Payments** (Lightning address and Locked Ecash), **Privacy**, **About**, and **Delete Wallet**. Every screen is a page rather than a sheet, and confirmations use Omarchy's own dialog.
 
-Without a password, cashu.me keeps its database key in a private local file and opens automatically with your desktop session. Anyone able to access your desktop account can open the wallet. Password protection encrypts that key and removes the local unprotected copy. Encrypted backups still have their own password, independently of this setting.
+**Lightning** turns on an npub.cash Lightning address, `<npub>@npubx.cash`, whose key is derived from the seed. Payments to it are minted as ecash at the receiving mint you choose, claimed automatically or with Check for payments. No Nostr relay is ever contacted.
+
+**Locked Ecash** shows the key derived from your seed that others can lock ecash to, a Quick lock shortcut for the send page, and device-only keys you can generate or import as an nsec, name, back up, and remove. Sending can lock a token to any key; receiving signs with every key the wallet holds, and a token locked to a key you don't hold is refused before the mint is contacted.
+
+**Privacy** decides which checks the wallet makes on its own: incoming invoices, repeating them on a timer, sent ecash, and reading a token from the clipboard when the receive page opens.
+
+## App Lock
+
+In Settings → App Lock, require a password whenever you want. With it on, the wallet asks for that password when opened and after desktop lock, and again before revealing the seed phrase or a private key. Turning it off asks for the current password.
+
+Without a password, cashu.me keeps its database key in a private local file and opens automatically with your desktop session. Anyone able to access your desktop account can open the wallet. App Lock encrypts that key and removes the local unprotected copy.
 
 ## Backup and restore
 
-Settings → Backup & recovery → Recovery phrase opens a full page that explains what the words are worth before a single reveal action shows them as a numbered grid together with your mint URLs; the page hides them after one minute or as soon as you leave it. Record both privately. Phrase recovery scans known mints for recoverable unspent ecash; it does not restore full history or every pending operation. There is no BIP39 passphrase field in this version.
+Settings → Backup & Restore → Backup seed phrase opens a full page that explains what the words are worth before a single reveal action shows them as a numbered grid together with your mint URLs; the page hides them after one minute or as soon as you leave it. Record both privately. Phrase recovery scans known mints for recoverable unspent ecash; it does not restore full history or every pending operation. There is no BIP39 passphrase field in this version.
 
-Export an encrypted full backup with its own password. The backup includes CDK operation state, recovery data, and mint settings. Export never overwrites a file. Import never overwrites an existing wallet. Stop using the original wallet before restoring a copy. Imported wallets cannot spend until their mints have reconciled the saved state; offline mints are retried.
+Settings → Backup & Restore → Restore walks through the words, the mints to recover from, and each mint's result, and replaces the current wallet after a confirmation; the same flow restores at first start. Settings → Delete Wallet removes the wallet from this device after a confirmation, so you can start fresh or restore another seed. Stop using the original wallet before restoring a copy.
 
 Wallet data lives in `$XDG_DATA_HOME/cashu-me`, normally `~/.local/share/cashu-me`. `CASHU_ME_DATA_DIR` selects a separate wallet directory for testing or migration. Do not copy live SQLite files as a substitute for the export action.
 

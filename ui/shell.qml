@@ -29,11 +29,12 @@ ShellRoot {
         securityPassword.clear()
         securityConfirmation.clear()
         currentPassword.clear()
-        backupPassword.clear()
-        backupConfirmation.clear()
-        restorePassword.clear()
-        restoreWords.clear()
-        restoreMints.clear()
+        revealPassword.clear()
+        revealKeyPassword.clear()
+        backend.revealedKey = ""
+        importKeyText = ""
+        appLockMode = ""
+        if (page !== "restore" && !restoreMode) { restoreWordsText = ""; restoreMintList = []; restoreResults = {} }
     }
     function dismiss(immediate, outside) {
         if (immediate === true) presentationMotion = false
@@ -135,6 +136,9 @@ ShellRoot {
     function back() {
         if (backend.review) { backend.request("cancel_payment", {review_id: backend.reviewId}); return }
         if (backend.busy) return
+        // The restore's final step is forward-only, as in the reference.
+        if ((page === "restore" || restoreMode) && restoreStep === "progress") return
+        if (!walletVisible && restoreMode) { restoreMode = false; return }
         if (page === "share" || page === "complete") {
             backend.share = {}; backend.completion = {}; trail = []; page = "home"; return
         }
@@ -144,6 +148,11 @@ ShellRoot {
     onPageChanged: {
         contentScroll.contentItem.contentY = 0
         if (page !== "recovery") backend.recoveryPhrase = ""
+        if (page !== "key_reveal") { backend.revealedKey = ""; revealKeyPassword.clear() }
+        if (page !== "recovery") revealPassword.clear()
+        if (page !== "app_lock") appLockMode = ""
+        if (page !== "advanced_keys") { importingKey = false; importKeyText = "" }
+        if (page === "receive_token" && app.privacy.auto_paste !== false && app.receiveText === "") { pasteTarget = "token"; pasteProbe.running = false; pasteProbe.running = true }
         if (page !== "share") { backend.share = {}; app.revealShare = false }
         if (page !== "scan") scanner.running = false
     }
@@ -187,9 +196,97 @@ ShellRoot {
     property string mintUrl: ""
     property string receiveMethod: "lightning"
     property var suggestions: []
-    property string restorePath: ""
-    property bool phraseRestore: false
     property bool restoreMode: false
+    // Settings state that lives in the interface. Everything the worker
+    // persists is read from backend.state; these are the pieces mid-edit.
+    property string appLockMode: ""
+    property bool importingKey: false
+    property string importKeyText: ""
+    property string deviceKeyId: ""
+    property string revealKeyId: ""
+    property string revealTitle: "Your Key"
+    property string qrTitle: ""
+    property string lockTo: ""
+    property bool lockToOpen: false
+    readonly property var privacy: backend.state.privacy || ({check_incoming: true, repeat_checks: true, check_sent: true, auto_paste: true})
+    readonly property var lightning: backend.state.lightning || ({enabled: false, auto_claim: true, status: "off"})
+    readonly property var locked: backend.state.locked || ({seed_key: "", quick_lock: false, device_keys: []})
+    readonly property var deviceKeys: app.locked.device_keys || []
+    readonly property var deviceKey: app.deviceKeys.find(key => key.id === app.deviceKeyId) || ({})
+    function setPrivacy(patch) {
+        var next = Object.assign({}, app.privacy, patch)
+        backend.request("set_privacy", {check_incoming: next.check_incoming !== false, repeat_checks: next.repeat_checks !== false, check_sent: next.check_sent !== false, auto_paste: next.auto_paste !== false})
+    }
+    function setLightning(patch) {
+        var next = Object.assign({}, app.lightning, patch)
+        backend.request("set_lightning", {enabled: next.enabled === true, auto_claim: next.auto_claim !== false, url: next.mint || ""})
+    }
+    function nextMintAfter(url) {
+        var index = app.mints.findIndex(mint => mint.url === url)
+        return app.mints.length ? app.mints[(index + 1) % app.mints.length].url : ""
+    }
+    function showQr(title, text) { app.qrTitle = title; backend.request("make_qr", {text: text}) }
+    function copyText(text) { app.clipboardText = text; clipboard.stdinEnabled = true; clipboard.running = true }
+    function shortKey(key) { return key && key.length > 20 ? key.slice(0, 10) + "…" + key.slice(-8) : (key || "") }
+    function ago(seconds) {
+        if (!seconds) return ""
+        var elapsed = Math.max(0, Math.floor(Date.now() / 1000 - seconds))
+        if (elapsed < 60) return "just now"
+        if (elapsed < 3600) return Math.floor(elapsed / 60) + "m ago"
+        if (elapsed < 86400) return Math.floor(elapsed / 3600) + "h ago"
+        return Math.floor(elapsed / 86400) + "d ago"
+    }
+    // A page that pins its action to the bottom of the panel: fills the
+    // panel, but never stretches a tall window into a void.
+    function pinnedHeight(implicit) { return Math.max(implicit, Math.min(contentScroll.availableHeight, Style.space(620)) - header.height - Style.space(app.compact ? 16 : 22)) }
+    // ---- Restore flow
+    property string restoreStep: "seed"
+    property string restoreWordsText: ""
+    readonly property int restoreWordCount: app.restoreWordsText.trim() === "" ? 0 : app.restoreWordsText.trim().split(/\s+/).length
+    property var restoreMintList: []
+    property string restoreMintInput: ""
+    property string restoreNotice: ""
+    property var restoreResults: ({})
+    property bool restoreReplacing: false
+    function startRestore() { restoreStep = "seed"; restoreWordsText = ""; restoreMintList = []; restoreMintInput = ""; restoreNotice = ""; restoreResults = {}; restoreReplacing = false }
+    function stageRestoreMint(input) {
+        var added = 0, skipped = 0
+        input.split(/[\s,]+/).forEach(piece => {
+            var url = piece.trim()
+            if (url === "") return
+            if (!/^https?:\/\//i.test(url)) url = "https://" + url
+            url = url.replace(/\/+$/, "")
+            if (!/^https?:\/\/[^\s\/]+\.[^\s\/]+/i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(url)) { skipped++; return }
+            if (app.restoreMintList.some(mint => mint.url.toLowerCase() === url.toLowerCase())) { skipped++; return }
+            app.restoreMintList = app.restoreMintList.concat([{url: url}])
+            added++
+        })
+        app.restoreMintInput = ""
+        app.restoreNotice = added === 0 ? (skipped > 0 ? "That doesn't look like a mint URL, or it is already in the list." : "") : ""
+    }
+    function beginRestore() {
+        app.restoreNotice = ""
+        if (app.walletVisible) { replaceDialog.opened = true; return }
+        app.restoreInstall()
+    }
+    function restoreInstall() {
+        app.restoreResults = {}
+        var urls = app.restoreMintList.map(mint => mint.url)
+        backend.request("restore_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " "), mint_urls: urls, password: ""})
+    }
+    function restoreRunNext() {
+        var next = app.restoreMintList.find(mint => !app.restoreResults[mint.url] || app.restoreResults[mint.url].status === "pending")
+        if (!next) return
+        app.restoreResults = Object.assign({}, app.restoreResults, {[next.url]: {status: "restoring"}})
+        backend.request("restore_mint", {url: next.url})
+    }
+    function retryRestoreMint(url) {
+        app.restoreResults = Object.assign({}, app.restoreResults, {[url]: {status: "pending"}})
+        app.restoreRunNext()
+    }
+    function finishRestore() { app.restoreMode = false; app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {} }
+    function pasteInto(target) { pasteTarget = target; pasteProbe.running = false; pasteProbe.running = true }
+    property string pasteTarget: ""
     property bool automaticOpenAttempted: false
     property string receiveText: ""
     property string scanTarget: "send"
@@ -233,11 +330,30 @@ ShellRoot {
         // every word from paper.
         onSucceeded: method => {
             if (method === "unlock" || method === "create") password.clear()
-            if (method === "restore_phrase") { restoreWords.clear(); restoreMints.clear() }
-            if (method === "restore_backup") restorePassword.clear()
-            if (method === "export_backup") { backupPassword.clear(); backupConfirmation.clear() }
-            if (method === "set_password") { securityPassword.clear(); securityConfirmation.clear() }
-            if (method === "remove_password") currentPassword.clear()
+            if (method === "validate_phrase") app.restoreStep = "mints"
+            if (method === "restore_phrase") { app.trail = []; app.page = "restore"; app.restoreStep = "progress"; app.restoreRunNext() }
+            if (method === "delete_wallet") {
+                if (app.restoreReplacing) { app.restoreReplacing = false; app.restoreMode = true; app.restoreInstall() }
+                else { app.trail = []; app.page = "home"; app.restoreMode = false }
+            }
+            if (method === "set_password" || method === "remove_password") { securityPassword.clear(); securityConfirmation.clear(); currentPassword.clear(); app.appLockMode = "" }
+            if (method === "recovery_phrase") revealPassword.clear()
+            if (method === "reveal_key") revealKeyPassword.clear()
+            if (method === "import_key") { app.importKeyText = ""; app.importingKey = false }
+            if (method === "remove_key") app.back()
+            if (method === "make_qr") { if (app.page !== "qr") app.go("qr") }
+            if (method === "locked_request") { if (app.page !== "qr") app.go("qr") }
+        }
+        onFailed: method => {
+            if (method === "restore_mint") {
+                var current = app.restoreMintList.find(mint => (app.restoreResults[mint.url] || {}).status === "restoring")
+                if (current) app.restoreResults = Object.assign({}, app.restoreResults, {[current.url]: {status: "failed", error: backend.error}})
+            }
+            if (method === "restore_phrase" && !backend.state.exists) app.restoreStep = "mints"
+        }
+        onRestored: result => {
+            app.restoreResults = Object.assign({}, app.restoreResults, {[result.mint]: {status: "done", recovered: result.recovered}})
+            app.restoreRunNext()
         }
         onLocked: {
             app.page = "home"
@@ -250,9 +366,11 @@ ShellRoot {
             scanner.running = false
             app.copyCancelled = true
             clipboard.running = false
-            exportDialog.close()
-            importDialog.close()
             imageDialog.close()
+            deleteDialog.opened = false
+            replaceDialog.opened = false
+            removeKeyDialog.opened = false
+            app.restoreReplacing = false
         }
     }
     DesktopLock {
@@ -272,16 +390,6 @@ ShellRoot {
     FileView {
         path: Qt.resolvedUrl("suggested-mints.json").toString().replace("file://", "")
         onLoaded: { try { app.suggestions = JSON.parse(text()) } catch (_) { app.suggestions = [] } }
-    }
-    FileDialog {
-        id: exportDialog
-        title: "Save encrypted wallet backup"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["cashu.me backup (*.backup)"]
-        defaultSuffix: "backup"
-        onAccepted: {
-            backend.request("export_backup", {path: decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, "")), password: backupPassword.text})
-        }
     }
     FileDialog {
         id: imageDialog
@@ -330,12 +438,24 @@ ShellRoot {
         }
     }
     Timer { running: !!backend.review; interval: 1000; repeat: true; onTriggered: app.now = Date.now() }
-    FileDialog {
-        id: importDialog
-        title: "Choose a cashu.me backup"
-        fileMode: FileDialog.OpenFile
-        nameFilters: ["cashu.me backup (*.backup)", "All files (*)"]
-        onAccepted: app.restorePath = decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, ""))
+    // Reads the Wayland clipboard once, for auto-paste on the receive page
+    // and the Paste actions on the restore page. wl-paste is the same tool
+    // the copy path relies on.
+    Process {
+        id: pasteProbe
+        command: ["wl-paste", "--no-newline", "--type", "text/plain"]
+        property string collected: ""
+        onStarted: collected = ""
+        stdout: SplitParser { onRead: data => pasteProbe.collected += data + " " }
+        stderr: SplitParser { onRead: data => {} }
+        onExited: (code, status) => {
+            var text = pasteProbe.collected.trim()
+            if (code !== 0) return
+            if (app.pasteTarget === "token") { if (text.startsWith("cashu") && app.receiveText === "") app.receiveText = text }
+            else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
+            else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
+            app.pasteTarget = ""
+        }
     }
 
     IpcHandler {
@@ -486,6 +606,89 @@ ShellRoot {
         tooltipText: Accessible.name
         opacity: enabled ? 1 : 0.4
     }
+    component Caption: Label { opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1; Layout.topMargin: Style.space(6) }
+    component Footer: Label { opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+    // A row whose whole surface flips a setting, with the kit's own switch
+    // at the end, the way the reference's toggle rows work.
+    component ToggleRow: Button {
+        id: toggleRow
+        property string icon: ""
+        property string heading: ""
+        property string detail: ""
+        property bool checked: false
+        property bool busy: false
+        signal toggled()
+        text: ""
+        focusable: true
+        Layout.fillWidth: true
+        implicitHeight: toggleContent.implicitHeight + Style.space(24)
+        implicitWidth: Style.space(240)
+        opacity: enabled ? 1 : 0.4
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: heading + ". " + detail
+        Accessible.checked: checked
+        onClicked: if (!busy) toggled()
+        RowLayout {
+            id: toggleContent
+            anchors.fill: parent
+            anchors.margins: Style.space(12)
+            spacing: Style.space(14)
+            Label { visible: toggleRow.icon !== ""; text: toggleRow.icon; font.pixelSize: Style.font.heading; opacity: 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                spacing: Style.space(5)
+                Label { text: toggleRow.heading; font.bold: true; Layout.fillWidth: true }
+                Label { visible: toggleRow.detail !== ""; text: toggleRow.detail; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+            }
+            Ui.ToggleSwitch { checked: toggleRow.checked; busy: toggleRow.busy; interactive: false; Layout.alignment: Qt.AlignVCenter }
+        }
+    }
+    // A key with its status, tap-to-copy public key, and two actions, as
+    // in the reference's KeyCard.
+    component KeyCard: Rectangle {
+        id: keyCard
+        property string title: ""
+        property string status: ""
+        property color statusColor: Color.foreground
+        property string pubkey: ""
+        property string revealLabel: "Reveal key"
+        signal showQr()
+        signal reveal()
+        Layout.fillWidth: true
+        implicitHeight: keyContent.implicitHeight + Style.space(28)
+        radius: Style.cornerRadius
+        color: Qt.alpha(Color.foreground, 0.07)
+        ColumnLayout {
+            id: keyContent
+            anchors.fill: parent
+            anchors.margins: Style.space(14)
+            spacing: Style.space(10)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(12)
+                Label { text: "󰌆"; font.pixelSize: Style.font.heading; opacity: 0.8 }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.space(3)
+                    Label { text: keyCard.title; font.bold: true }
+                    Label { visible: keyCard.status !== ""; text: keyCard.status; color: keyCard.statusColor; opacity: keyCard.statusColor === Color.foreground ? 0.6 : 0.9; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                }
+            }
+            Secondary {
+                text: clipboard.running ? "Copied · waiting for paste" : app.shortKey(keyCard.pubkey) + "   󰆏"
+                Accessible.name: "Copy this key"
+                enabled: keyCard.pubkey !== "" && !clipboard.running
+                onClicked: app.copyText(keyCard.pubkey)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(12)
+                Tab { text: "󰐲  Show QR"; enabled: keyCard.pubkey !== "" && !backend.busy; onClicked: keyCard.showQr() }
+                Tab { text: "󰈈  " + keyCard.revealLabel; enabled: keyCard.pubkey !== "" && !backend.busy; onClicked: keyCard.reveal() }
+            }
+        }
+    }
     component Divider: Rectangle {
         Layout.fillWidth: true
         implicitHeight: 1
@@ -497,6 +700,9 @@ ShellRoot {
         property string heading: ""
         property string detail: ""
         property string trailing: "›"
+        property string icon: ""
+        property color iconColor: Color.foreground
+        property bool destructive: false
         // Opt-in slot for "this is the active one" among a set of entries
         // (the selected mint, say). It occupies constant width and only its
         // opacity changes, so switching selection never reflows the row the
@@ -514,11 +720,12 @@ ShellRoot {
             anchors.fill: parent
             anchors.margins: Style.space(12)
             spacing: Style.space(16)
+            Label { visible: entry.icon !== ""; text: entry.icon; color: entry.destructive ? Color.urgent : entry.iconColor; font.pixelSize: Style.font.heading; opacity: entry.destructive || entry.iconColor !== Color.foreground ? 1 : 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignVCenter }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 spacing: Style.space(5)
-                Label { text: entry.heading; font.bold: true; Layout.fillWidth: true }
+                Label { text: entry.heading; color: entry.destructive ? Color.urgent : Color.foreground; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle; wrapMode: Text.NoWrap }
                 Label { visible: entry.detail !== ""; text: entry.detail; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
             }
             Label { text: entry.trailing; font.pixelSize: Style.font.body; Layout.alignment: Qt.AlignVCenter }
@@ -566,7 +773,7 @@ ShellRoot {
             item.outputName = Qt.binding(() => app.outputName)
             // A review holds reserved funds. Require an explicit confirm or
             // cancel rather than hiding it on a stray click outside the panel.
-            item.suspendDismissal = Qt.binding(() => exportDialog.visible || importDialog.visible || imageDialog.visible || scanner.running || !!backend.review)
+            item.suspendDismissal = Qt.binding(() => imageDialog.visible || scanner.running || !!backend.review || deleteDialog.opened || replaceDialog.opened || removeKeyDialog.opened)
             item.dismissed.connect(() => app.dismiss(false, true))
         }
     }
@@ -655,7 +862,7 @@ ShellRoot {
                     ready: backend.ready && desktopLock.safeToUnlock
                     busy: backend.busy
                     onCreateRequested: backend.request("create")
-                    onRestoreRequested: app.restoreMode = true
+                    onRestoreRequested: { app.startRestore(); app.restoreMode = true }
                 }
                 ColumnLayout {
                     visible: !app.walletVisible && backend.state.exists
@@ -681,58 +888,90 @@ ShellRoot {
                 }
                 Label { visible: !app.walletVisible && !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
                 Label { visible: !app.walletVisible && !backend.ready && !backend.error; text: "Starting cashu.me…"; opacity: 0.65; Layout.fillWidth: true }
+                // ---- Restore, in three steps after cashubtc/wallet: the words,
+                // the mints to recover from, then each mint's result. From
+                // onboarding it installs a new wallet; from Settings it
+                // replaces the current one after a confirmation. Desktop
+                // liberty: the words go into one field rather than twelve.
                 ColumnLayout {
-                    visible: !app.walletVisible && !backend.state.exists && app.restoreMode
+                    id: restorePage
+                    readonly property bool onboarding: !app.walletVisible
+                    readonly property int mintCount: app.restoreMintList.length
+                    readonly property bool allSettled: app.restoreMintList.length > 0 && app.restoreMintList.every(mint => ["done", "failed"].indexOf((app.restoreResults[mint.url] || {}).status) >= 0)
+                    readonly property double recoveredTotal: app.restoreMintList.reduce((sum, mint) => sum + Number((app.restoreResults[mint.url] || {}).recovered || 0), 0)
+                    visible: !backend.review && ((app.walletVisible && app.page === "restore") || (!app.walletVisible && !backend.state.exists && app.restoreMode))
                     Layout.fillWidth: true
                     spacing: Style.space(16)
-                    Label { text: "Bring your wallet home"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { text: "Restore your encrypted backup or use your recovery words and mint URLs."; opacity: 0.65; Layout.fillWidth: true }
-                    Secondary { text: "Choose a backup file"; onClicked: importDialog.open() }
-                    Secondary { text: "Use recovery words"; onClicked: app.phraseRestore = !app.phraseRestore }
+                    // Step 1: seed
+                    Label { visible: app.restoreStep === "seed"; text: "Restore Wallet"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { visible: app.restoreStep === "seed"; text: "Enter your 12 words in order."; opacity: 0.65; Layout.fillWidth: true }
                     Controls.TextArea {
                         id: restoreWords
-                        visible: app.phraseRestore && !backend.state.exists
+                        visible: app.restoreStep === "seed"
                         Layout.fillWidth: true
-                        placeholderText: "Recovery words, in order"
+                        placeholderText: "Recovery words, separated by spaces"
                         wrapMode: TextEdit.Wrap
                         color: Color.foreground
                         placeholderTextColor: Qt.alpha(Color.foreground, 0.5)
                         font.family: Style.font.family
-                        background: Rectangle { color: "transparent"; border.color: Qt.alpha(Color.foreground, 0.25) }
+                        text: app.restoreWordsText
+                        onTextChanged: if (text !== app.restoreWordsText) app.restoreWordsText = text
+                        background: Rectangle { color: "transparent"; radius: Style.cornerRadius; border.color: Qt.alpha(Color.foreground, 0.25) }
                     }
-                    Controls.TextArea {
-                        id: restoreMints
-                        visible: app.phraseRestore && !backend.state.exists
+                    Label { visible: app.restoreStep === "seed"; text: app.restoreWordCount + " of 12 words"; opacity: 0.55; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    Secondary { visible: app.restoreStep === "seed"; text: "Paste seed phrase"; onClicked: app.pasteInto("words") }
+                    Action { visible: app.restoreStep === "seed"; text: backend.busy ? "Checking…" : "Next"; enabled: backend.ready && !backend.busy && app.restoreWordCount === 12; onClicked: backend.request("validate_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " ")}) }
+                    Secondary { visible: app.restoreStep === "seed" && restorePage.onboarding; text: "Back"; onClicked: app.restoreMode = false }
+                    // Step 2: mints
+                    Label { visible: app.restoreStep === "mints"; text: "Restore Funds"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { visible: app.restoreStep === "mints"; text: "Add the mints you used before to recover funds from this seed."; opacity: 0.65; Layout.fillWidth: true }
+                    Ui.TextField { id: restoreMintField; visible: app.restoreStep === "mints"; Layout.fillWidth: true; placeholderText: "mint.example.com"; text: app.restoreMintInput; onTextEdited: app.restoreMintInput = text; onAccepted: app.stageRestoreMint(app.restoreMintInput) }
+                    RowLayout {
+                        visible: app.restoreStep === "mints"
                         Layout.fillWidth: true
-                        placeholderText: "Your mint URLs, one per line"
-                        wrapMode: TextEdit.Wrap
-                        color: Color.foreground
-                        placeholderTextColor: Qt.alpha(Color.foreground, 0.5)
-                        font.family: Style.font.family
-                        background: Rectangle { color: "transparent"; border.color: Qt.alpha(Color.foreground, 0.25) }
+                        spacing: Style.space(12)
+                        Tab { text: "Add"; enabled: app.restoreMintInput.trim() !== ""; onClicked: app.stageRestoreMint(app.restoreMintInput) }
+                        Tab { text: "Paste"; onClicked: app.pasteInto("mints") }
                     }
-                    Action {
-                        visible: app.phraseRestore && !backend.state.exists
-                        text: "Recover wallet"
-                        Layout.fillWidth: true
-                        enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock && restoreWords.text.trim() !== "" && restoreMints.text.trim() !== ""
-                        onClicked: {
-                            backend.request("restore_phrase", {phrase: restoreWords.text.trim().replace(/\s+/g, " "), mint_urls: restoreMints.text.trim().split(/\s+/)})
+                    Label { visible: app.restoreStep === "mints" && app.restoreNotice !== ""; text: app.restoreNotice; opacity: 0.75; Layout.fillWidth: true }
+                    Repeater {
+                        model: app.restoreStep === "mints" ? app.restoreMintList : []
+                        delegate: Entry {
+                            required property var modelData
+                            icon: "󰭎"
+                            heading: modelData.url.replace(/^https?:\/\//, "")
+                            detail: modelData.url
+                            trailing: "󰅖"
+                            Accessible.name: "Remove mint " + modelData.url
+                            onClicked: app.restoreMintList = app.restoreMintList.filter(mint => mint.url !== modelData.url)
                         }
                     }
-                    Label { visible: app.phraseRestore && !backend.state.exists; text: "Use your original mint URLs. Recovery scans those mints for unspent ecash; it cannot recover your full history or every pending operation. Stop using the old wallet before recovery."; Layout.fillWidth: true; opacity: 0.65 }
-                    Label { visible: app.restorePath !== "" && !backend.state.exists; text: app.restorePath; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.TextField { id: restorePassword; visible: app.restorePath !== "" && !backend.state.exists; password: true; placeholderText: "Backup password"; Layout.fillWidth: true }
                     Action {
-                        visible: app.restorePath !== "" && !backend.state.exists
-                        text: "Restore wallet"
-                        Layout.fillWidth: true
-                        enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock && restorePassword.text.length > 0
-                        onClicked: {
-                            backend.request("restore_backup", {path: app.restorePath, backup_password: restorePassword.text})
+                        visible: app.restoreStep === "mints"
+                        text: restorePage.mintCount === 0 ? "Restore" : "Restore from " + restorePage.mintCount + (restorePage.mintCount === 1 ? " mint" : " mints")
+                        enabled: restorePage.mintCount > 0 && !backend.busy
+                        onClicked: app.beginRestore()
+                    }
+                    Secondary { visible: app.restoreStep === "mints"; text: "Back to seed phrase"; enabled: !backend.busy; onClicked: app.restoreStep = "seed" }
+                    // Step 3: progress
+                    Label { visible: app.restoreStep === "progress"; text: restorePage.allSettled ? "Restore Complete" : "Restoring…"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { visible: app.restoreStep === "progress"; text: !restorePage.allSettled ? "Recovering funds from your mints…" : restorePage.recoveredTotal > 0 ? "Here's what we recovered." : "No funds found on these mints."; opacity: 0.65; Layout.fillWidth: true }
+                    Label { visible: app.restoreStep === "progress" && restorePage.recoveredTotal > 0; text: "󰄬  Recovered: " + app.amountLabel(restorePage.recoveredTotal); color: app.received; Layout.fillWidth: true }
+                    Repeater {
+                        model: app.restoreStep === "progress" ? app.restoreMintList : []
+                        delegate: Entry {
+                            required property var modelData
+                            readonly property var result: app.restoreResults[modelData.url] || {status: "pending"}
+                            icon: result.status === "done" ? (Number(result.recovered || 0) > 0 ? "󰄬" : "󰍶") : result.status === "failed" ? "󰅙" : "󰔟"
+                            iconColor: result.status === "done" && Number(result.recovered || 0) > 0 ? app.received : result.status === "failed" ? Color.urgent : Color.foreground
+                            heading: app.mintName(modelData.url) !== modelData.url ? app.mintName(modelData.url) : modelData.url.replace(/^https?:\/\//, "")
+                            detail: result.status === "failed" ? (result.error || "Could not restore this mint.") : modelData.url
+                            trailing: result.status === "done" ? app.amountLabel(result.recovered || 0) : result.status === "failed" ? "Retry" : result.status === "restoring" ? "Restoring…" : "Waiting"
+                            enabled: result.status === "failed" && !backend.busy
+                            onClicked: app.retryRestoreMint(modelData.url)
                         }
                     }
-                    Secondary { text: "Back"; onClicked: app.restoreMode = false }
+                    Action { visible: app.restoreStep === "progress"; text: "Continue"; enabled: restorePage.allSettled && !backend.busy; onClicked: app.finishRestore() }
                 }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
                 Label { visible: backend.notice !== "" && app.page !== "complete"; text: backend.notice; Layout.fillWidth: true }
@@ -748,6 +987,7 @@ ShellRoot {
                     Label { visible: !!backend.review && !backend.review.amount; text: "Reclaim unspent ecash"; font.pixelSize: Style.space(24); Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Divider {}
                     DetailRow { heading: "Mint"; value: backend.review ? app.mintName(backend.review.mint) : "" }
+                    DetailRow { visible: !!backend.review && !!backend.review.locked_to; heading: "Locked to"; value: backend.review && backend.review.locked_to ? (backend.review.locked_to === app.locked.seed_key ? "Your key" : backend.review.receiving ? backend.review.locked_to : app.shortKey(backend.review.locked_to)) : "" }
                     // A zero fee is noise, and the total is the amount plus
                     // that fee, which the reader can add. Only a real fee shows.
                     DetailRow { visible: !!backend.review && Number(backend.review.fee || 0) > 0; heading: "Maximum fee"; value: backend.review ? app.primaryAmount(backend.review.fee) : "" }
@@ -867,7 +1107,7 @@ ShellRoot {
                     Ui.TextField { id: invoiceInput; Layout.fillWidth: true; placeholderText: "Paste a Lightning invoice"; text: app.paymentText; onTextEdited: app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
                     Action { id: invoiceReview; visible: app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
                     Entry { heading: "Scan a payment"; detail: "Read a QR from your screen, an image, or camera."; onClicked: app.go("scan") }
-                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.entryText = ""; app.go("send_amount") } }
+                    Entry { id: ecashChoice; heading: "Send ecash"; detail: "Create a token to share with someone."; onClicked: { app.entryText = ""; app.lockTo = ""; app.lockToOpen = false; app.go("send_amount") } }
                     Entry { visible: !backend.state.selected; heading: "Choose a mint first"; onClicked: app.go("mints") }
                 }
                 ColumnLayout {
@@ -942,12 +1182,30 @@ ShellRoot {
                         Layout.fillWidth: true
                         horizontalAlignment: Text.AlignHCenter
                     }
+                    // Locked Ecash: lock this token to a key. The quick shortcut
+                    // fills in the wallet's own key, as the reference's send
+                    // drawer does when "Quick lock to my key" is on.
+                    RowLayout {
+                        visible: app.page === "send_amount"
+                        Layout.fillWidth: true
+                        spacing: Style.space(12)
+                        Tab { visible: app.locked.quick_lock === true && !!app.locked.seed_key; text: "󰌾  Lock to my key"; selected: app.lockTo !== "" && app.lockTo === app.locked.seed_key; onClicked: { app.lockTo = app.lockTo === app.locked.seed_key ? "" : app.locked.seed_key; app.lockToOpen = false; amountInput.forceActiveFocus() } }
+                        Tab { text: app.lockTo !== "" && app.lockTo !== app.locked.seed_key ? "󰌾  Locked to " + app.shortKey(app.lockTo) : "󰌾  Lock to a key"; selected: app.lockToOpen; onClicked: { app.lockToOpen = !app.lockToOpen; if (!app.lockToOpen) amountInput.forceActiveFocus() } }
+                    }
+                    Ui.TextField {
+                        visible: app.page === "send_amount" && app.lockToOpen
+                        Layout.fillWidth: true
+                        placeholderText: "Recipient's public key (02… hex)"
+                        text: app.lockTo === app.locked.seed_key ? "" : app.lockTo
+                        onTextEdited: app.lockTo = text.trim()
+                        onAccepted: { app.lockToOpen = false; amountInput.forceActiveFocus() }
+                    }
                     Item { Layout.fillHeight: true }
                     Action {
                         id: amountContinue
                         text: backend.busy ? "Preparing…" : app.page === "send_amount" ? "Send" : "Request"
                         enabled: backend.unlocked && !backend.busy && !!backend.state.selected && app.entrySats > 0 && !app.entryOver
-                        onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", {amount: String(app.entrySats)})
+                        onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", app.page === "send_amount" ? {amount: String(app.entrySats), lock_to: app.lockTo} : {amount: String(app.entrySats)})
                     }
                 }
                 ColumnLayout {
@@ -1052,48 +1310,50 @@ ShellRoot {
                     Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
                     Secondary { text: "View my mints"; onClicked: app.tab("mints") }
                 }
+                // ---- Settings, after cashubtc/wallet's Settings screen, minus
+                // Nostr. Pages, not sheets; confirmations use Omarchy's own
+                // dialog. The "How locking works" explainer is a row rather
+                // than a toolbar icon.
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "settings"
                     Layout.fillWidth: true
-                    spacing: Style.space(18)
+                    spacing: Style.space(14)
                     Label { text: "Settings"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { text: "WALLET"; opacity: 0.55; font.pixelSize: Style.font.caption }
-                    Entry { heading: "Backup & recovery"; detail: "Recovery words and encrypted backups"; onClicked: app.go("backup") }
-                    Entry { heading: "Security"; detail: backend.state.password_required ? "Password protection on" : "Password protection off"; onClicked: app.go("security") }
-                    Entry { heading: "Mints"; detail: (backend.state.mints || []).length + " added"; onClicked: app.go("mints") }
-                    Entry {
-                        heading: "Display"
-                        detail: (app.bitcoinSymbol ? "₿ symbol" : "Sats") + (app.fiatCurrency ? " · " + app.fiatCurrency : " · No local currency")
-                        onClicked: app.go("display")
+                    Caption { text: "DISPLAY" }
+                    Entry { icon: "󰓅"; heading: "Currency"; trailing: (app.fiatCurrency || "Off") + "  ›"; onClicked: app.go("currency") }
+                    ToggleRow { icon: "󰠓"; heading: "Use ₿ symbol"; checked: app.bitcoinSymbol; onToggled: app.setDisplay(!app.bitcoinSymbol, app.fiatCurrency) }
+                    Caption { text: "BACKUP & SECURITY" }
+                    Entry { icon: "󰌆"; heading: "Backup & Restore"; onClicked: app.go("backup") }
+                    Entry { icon: "󰒃"; heading: "App Lock"; onClicked: app.go("app_lock") }
+                    Caption { text: "PAYMENTS" }
+                    Entry { icon: "󱐋"; heading: "Lightning"; onClicked: app.go("lightning") }
+                    Entry { icon: "󰌾"; heading: "Locked Ecash"; onClicked: app.go("locked") }
+                    Caption { text: "PRIVACY" }
+                    Entry { icon: "󰈉"; heading: "Privacy"; onClicked: app.go("privacy") }
+                    Caption { text: "ABOUT" }
+                    Entry { icon: "󰖟"; heading: "Learn about Cashu"; trailing: "󰏌"; onClicked: Qt.openUrlExternally("https://cashu.space") }
+                    Entry { icon: "󰈙"; heading: "Protocol Specs (NUTs)"; trailing: "󰏌"; onClicked: Qt.openUrlExternally("https://github.com/cashubtc/nuts") }
+                    Caption { text: "DANGER" }
+                    Entry { icon: "󰆴"; heading: "Delete Wallet"; trailing: ""; destructive: true; enabled: !backend.busy; onClicked: deleteDialog.opened = true }
+                    Label {
+                        text: "cashu.me" + (backend.state.version ? " · " + backend.state.version : "") + (backend.preview ? " · interface preview" : "")
+                        font.pixelSize: Style.font.caption
+                        opacity: 0.45
+                        Layout.fillWidth: true
+                        Layout.topMargin: Style.space(12)
+                        horizontalAlignment: Text.AlignHCenter
                     }
-                    Entry {
-                        heading: "Reduce motion"
-                        detail: "Gentle fades without movement"
-                        trailing: motion.reduced ? "On" : "Off"
-                        onClicked: motion.reducedMotion = !motion.reducedMotion
-                    }
-                    Divider {}
-                    Label { text: "Closing the window keeps your unlocked wallet monitoring payments."; opacity: 0.6; Layout.fillWidth: true }
-                    Action { text: "Lock wallet"; visible: backend.state.password_required === true; enabled: backend.unlocked && !backend.busy && !backend.review; Layout.fillWidth: true; onClicked: backend.lock() }
-                    Secondary { text: "Quit cashu.me"; onClicked: Qt.quit() }
                 }
+                // ---- Display → Currency
                 ColumnLayout {
-                    visible: app.walletVisible && !backend.review && app.page === "display"
+                    visible: app.walletVisible && !backend.review && app.page === "currency"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: "Display"; font.bold: true; font.pixelSize: Style.font.heading }
+                    spacing: Style.space(12)
+                    Label { text: "Currency"; font.bold: true; font.pixelSize: Style.font.heading }
                     Entry {
-                        heading: "Bitcoin symbol"
-                        detail: "Show ₿21,000 instead of 21,000 sats"
-                        trailing: app.bitcoinSymbol ? "On" : "Off"
-                        onClicked: app.setDisplay(!app.bitcoinSymbol, app.fiatCurrency)
-                    }
-                    Divider {}
-                    Label { text: "LOCAL CURRENCY"; opacity: 0.55; font.pixelSize: Style.font.caption }
-                    Label { text: "Show an approximate value in a local currency. This never changes what a mint holds or sends; sats stay the real amount, and the rate is only an estimate."; opacity: 0.6; Layout.fillWidth: true }
-                    Entry {
+                        icon: "󰠓"
                         heading: "Off"
-                        detail: "Show only sats"
+                        detail: "Sats only"
                         showsActiveMark: true
                         selected: app.fiatCurrency === ""
                         onClicked: app.setDisplay(app.bitcoinSymbol, "")
@@ -1102,77 +1362,47 @@ ShellRoot {
                         model: backend.state.currencies || []
                         delegate: Entry {
                             required property var modelData
-                            heading: modelData.flag + "  " + modelData.code + "  " + modelData.symbol
+                            icon: modelData.flag
+                            heading: modelData.code
                             detail: modelData.name
                             showsActiveMark: true
                             selected: app.fiatCurrency === modelData.code
                             onClicked: app.setDisplay(app.bitcoinSymbol, modelData.code)
                         }
                     }
-                    Label { visible: app.fiatCurrency !== "" && !backend.state.exchange_rate; text: "Fetching the exchange rate…"; opacity: 0.6; Layout.fillWidth: true }
-                }
-                ColumnLayout {
-                    visible: app.walletVisible && !backend.review && app.page === "security"
-                    Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: "Security"; font.bold: true }
-                    Label {
-                        text: backend.state.password_required ? "Password protection is on. Your wallet locks with the desktop."
-                            : "Password protection is optional. Without it, anyone using your desktop account can open this wallet."
-                        opacity: 0.65; Layout.fillWidth: true
-                    }
-                    Label {
-                        visible: !backend.state.password_required
-                        text: "If someone copies your wallet folder, this password is the only thing protecting it. Several random words make a far stronger passphrase than a short complicated one."
-                        opacity: 0.65; Layout.fillWidth: true
-                    }
-                    Ui.TextField { id: securityPassword; visible: !backend.state.password_required; password: true; placeholderText: "New passphrase (12+ characters)"; Layout.fillWidth: true }
-                    Ui.TextField { id: securityConfirmation; visible: !backend.state.password_required; password: true; placeholderText: "Repeat password"; Layout.fillWidth: true }
-                    Action {
-                        id: enablePasswordButton
-                        visible: !backend.state.password_required
-                        text: "Enable password"
+                    Divider { visible: app.fiatCurrency !== "" }
+                    RowLayout {
+                        visible: app.fiatCurrency !== ""
                         Layout.fillWidth: true
-                        enabled: backend.unlocked && !backend.busy && securityPassword.text.length >= 12 && securityPassword.text === securityConfirmation.text
-                        onClicked: backend.request("set_password", {password: securityPassword.text})
+                        spacing: Style.space(12)
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(2)
+                            Label { text: "BTC Price"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                            Label { text: app.fiatAvailable ? app.fiatText(100000000) : "Loading…"; font.pixelSize: Style.font.title }
+                        }
+                        Label {
+                            visible: app.fiatAvailable && !!backend.state.exchange_rate.fetched_at
+                            text: "Updated " + app.ago(backend.state.exchange_rate ? backend.state.exchange_rate.fetched_at : 0)
+                            opacity: 0.55
+                            font.pixelSize: Style.font.caption
+                        }
+                        IconButton { iconText: "󰑐"; iconSpinning: backend.busy && backend.pendingMethod === "refresh_rate"; tooltipText: ""; Accessible.name: "Refresh price"; enabled: !backend.busy; onClicked: backend.request("refresh_rate") }
                     }
-                    Label { visible: !backend.state.password_required && securityConfirmation.text.length > 0 && securityPassword.text !== securityConfirmation.text; text: "Passwords do not match."; Layout.fillWidth: true; opacity: 0.65 }
-                    Ui.TextField { id: currentPassword; visible: backend.state.password_required === true; password: true; placeholderText: "Current password to remove protection"; Layout.fillWidth: true }
-                    Action {
-                        visible: backend.state.password_required === true
-                        text: "Remove password"
-                        Layout.fillWidth: true
-                        enabled: backend.unlocked && !backend.busy && currentPassword.text.length > 0
-                        onClicked: backend.request("remove_password", {password: currentPassword.text})
-                    }
-                    Divider {}
-
                 }
+                // ---- Backup & Restore
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "backup"
                     Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: "Backup & recovery"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Entry { heading: "Recovery phrase"; detail: "The 12 words that restore your wallet"; enabled: backend.unlocked && !backend.busy; onClicked: app.go("recovery") }
-                    Divider {}
-                    Label { text: "ENCRYPTED BACKUP"; opacity: 0.55; font.pixelSize: Style.font.caption }
-                    Label { text: "A backup travels, so it is the file most likely to be copied. Several random words make a far stronger passphrase than a short complicated one."; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.TextField { id: backupPassword; password: true; placeholderText: "Backup passphrase (12+ characters)"; Layout.fillWidth: true }
-                    Ui.TextField { id: backupConfirmation; password: true; placeholderText: "Repeat backup password"; Layout.fillWidth: true }
-                    Action {
-                        text: "Export encrypted backup"
-                        enabled: backend.unlocked && !backend.busy && backupPassword.text.length >= 12 && backupPassword.text === backupConfirmation.text
-                        Layout.fillWidth: true
-                        onClicked: exportDialog.open()
-                    }
-                    Label { text: "Full backup restore is available when setting up a new wallet. It never overwrites an existing wallet."; opacity: 0.65; Layout.fillWidth: true }
-                    Divider {}
-
+                    spacing: Style.space(14)
+                    Label { text: "Backup & Restore"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Entry { icon: "󰌆"; heading: "Backup seed phrase"; detail: "View and copy your 12 recovery words."; enabled: backend.unlocked && !backend.busy; onClicked: app.go("recovery") }
+                    Entry { icon: "󰑙"; heading: "Restore"; detail: "Restore a wallet and recover funds from mints."; enabled: backend.unlocked && !backend.busy; onClicked: { app.startRestore(); app.go("restore") } }
                 }
-                // The recovery phrase takes the whole page, after cashu.me's
-                // Backup Wallet sheet: a warning and a single reveal action
-                // first, then the words as a numbered grid with the mint
-                // URLs a restore also needs. The worker hides the phrase
+                // ---- Backup seed phrase. Takes the whole page: a warning and
+                // one reveal action first, then the numbered words with the
+                // mint URLs a restore also needs. With App Lock on, revealing
+                // asks for the password again. The worker hides the phrase
                 // after one minute; leaving the page hides it at once.
                 ColumnLayout {
                     id: recoveryPage
@@ -1180,39 +1410,23 @@ ShellRoot {
                     readonly property var words: backend.recoveryPhrase.trim().split(/\s+/).filter(word => word !== "")
                     visible: app.walletVisible && !backend.review && app.page === "recovery"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(implicitHeight, contentScroll.availableHeight - header.height - parent.spacing)
+                    Layout.preferredHeight: app.pinnedHeight(implicitHeight)
                     spacing: Style.space(16)
-                    Label { text: "Recovery phrase"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: "Backup Wallet"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
-                    Label {
-                        visible: !recoveryPage.revealed
-                        text: "󰌆"
-                        font.pixelSize: Style.space(44)
-                        opacity: 0.8
-                        Layout.fillWidth: true
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-                    Label {
-                        visible: !recoveryPage.revealed
-                        text: "Your recovery phrase is the only way to restore your wallet if this computer is lost."
-                        Layout.fillWidth: true
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-                    Label {
-                        visible: !recoveryPage.revealed
-                        text: "Anyone who sees these words can take your funds. Reveal them only when nobody is watching your screen, write them down on paper, and never share them or store them in a photo or a message."
-                        opacity: 0.65
-                        Layout.fillWidth: true
-                        horizontalAlignment: Text.AlignHCenter
-                    }
+                    Label { visible: !recoveryPage.revealed; text: "󰌆"; font.pixelSize: Style.space(44); opacity: 0.8; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: !recoveryPage.revealed; text: "Your recovery phrase is the only way to restore your wallet. Keep it private and stored somewhere safe. Never share it with anyone."; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: !recoveryPage.revealed; text: "Anyone who sees these words can take your funds. Reveal them only when nobody is watching your screen, and write them down on paper rather than in a photo or a message."; opacity: 0.65; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Item { visible: !recoveryPage.revealed; Layout.fillHeight: true }
+                    Ui.TextField { id: revealPassword; visible: !recoveryPage.revealed && backend.state.password_required === true; password: true; placeholderText: "Wallet password"; Layout.fillWidth: true; onAccepted: if (revealButton.enabled) revealButton.clicked() }
                     Action {
+                        id: revealButton
                         visible: !recoveryPage.revealed
-                        text: backend.busy ? "Revealing…" : "I understand, reveal my phrase"
-                        enabled: backend.unlocked && !backend.busy
-                        onClicked: backend.request("recovery_phrase")
+                        text: backend.busy ? "Revealing…" : "Reveal Recovery Phrase"
+                        enabled: backend.unlocked && !backend.busy && (backend.state.password_required !== true || revealPassword.text.length > 0)
+                        onClicked: backend.request("recovery_phrase", {password: revealPassword.text})
                     }
-                    Label { visible: recoveryPage.revealed; text: "Write these words down in order and keep them somewhere safe. Do not share them with anyone."; opacity: 0.65; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: recoveryPage.revealed; text: "Write down these words in order and store them somewhere safe. Do not share them with anyone."; opacity: 0.65; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     GridLayout {
                         visible: recoveryPage.revealed
                         Layout.fillWidth: true
@@ -1242,7 +1456,7 @@ ShellRoot {
                             }
                         }
                     }
-                    Label { visible: recoveryPage.revealed; text: "MINTS"; opacity: 0.55; font.pixelSize: Style.font.caption }
+                    Caption { visible: recoveryPage.revealed; text: "MINTS" }
                     Label { visible: recoveryPage.revealed; text: "A restore also needs your mint URLs. Keep these with the words."; opacity: 0.65; Layout.fillWidth: true }
                     Repeater {
                         model: recoveryPage.revealed ? app.mints : []
@@ -1252,20 +1466,248 @@ ShellRoot {
                     Item { visible: recoveryPage.revealed; Layout.fillHeight: true }
                     Action {
                         visible: recoveryPage.revealed
-                        text: clipboard.running ? "Copied · waiting for paste" : "Copy recovery phrase"
+                        text: clipboard.running ? "Copied · waiting for paste" : "Copy Recovery Phrase"
                         enabled: !clipboard.running
-                        onClicked: { app.clipboardText = backend.recoveryPhrase; clipboard.stdinEnabled = true; clipboard.running = true }
+                        onClicked: app.copyText(backend.recoveryPhrase)
                     }
                     Secondary { visible: recoveryPage.revealed; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
                 }
-
-                Divider { visible: app.walletVisible && app.page === "settings" }
-                Label {
-                    visible: app.walletVisible && app.page === "settings"
-                    text: backend.preview ? "Interface preview · wallet actions are disabled." : "Development build · validation in progress."
-                    font.pixelSize: Style.font.caption
-                    opacity: 0.55
+                // ---- App Lock: the reference's one toggle, with a password in
+                // place of Face ID. Turning it on asks for a new password here
+                // on the page; turning it off asks for the current one.
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "app_lock"
                     Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: "App Lock"; font.bold: true; font.pixelSize: Style.font.heading }
+                    ToggleRow {
+                        icon: "󰒃"
+                        heading: "Require a password"
+                        detail: "Ask for your password when opening the wallet."
+                        checked: backend.state.password_required === true || app.appLockMode === "enable"
+                        enabled: !backend.busy
+                        onToggled: app.appLockMode = backend.state.password_required === true ? (app.appLockMode === "disable" ? "" : "disable") : (app.appLockMode === "enable" ? "" : "enable")
+                    }
+                    Ui.TextField { id: securityPassword; visible: app.appLockMode === "enable"; password: true; placeholderText: "New password (12+ characters)"; Layout.fillWidth: true }
+                    Ui.TextField { id: securityConfirmation; visible: app.appLockMode === "enable"; password: true; placeholderText: "Repeat password"; Layout.fillWidth: true; onAccepted: if (enablePasswordButton.enabled) enablePasswordButton.clicked() }
+                    Label { visible: app.appLockMode === "enable" && securityConfirmation.text.length > 0 && securityPassword.text !== securityConfirmation.text; text: "Passwords do not match."; opacity: 0.65; Layout.fillWidth: true }
+                    Action {
+                        id: enablePasswordButton
+                        visible: app.appLockMode === "enable"
+                        text: backend.busy ? "Turning on…" : "Turn on App Lock"
+                        enabled: backend.unlocked && !backend.busy && securityPassword.text.length >= 12 && securityPassword.text === securityConfirmation.text
+                        onClicked: backend.request("set_password", {password: securityPassword.text})
+                    }
+                    Ui.TextField { id: currentPassword; visible: app.appLockMode === "disable"; password: true; placeholderText: "Current password"; Layout.fillWidth: true; onAccepted: if (disablePasswordButton.enabled) disablePasswordButton.clicked() }
+                    Action {
+                        id: disablePasswordButton
+                        visible: app.appLockMode === "disable"
+                        text: backend.busy ? "Turning off…" : "Turn off App Lock"
+                        enabled: backend.unlocked && !backend.busy && currentPassword.text.length > 0
+                        onClicked: backend.request("remove_password", {password: currentPassword.text})
+                    }
+                    Footer { text: backend.state.password_required === true ? "Your wallet locks with the desktop and asks for this password to open. Several random words make a far stronger password than a short complicated one." : "Without App Lock, anyone using your desktop account can open this wallet. If someone copies your wallet folder, a password is the only thing protecting it." }
+                    Footer { text: "Your seed phrase and private keys always require your password to reveal while App Lock is on." }
+                }
+                // ---- Payments → Lightning: an npub.cash Lightning address.
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "lightning"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: "Lightning"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Caption { text: "LIGHTNING ADDRESS" }
+                    ToggleRow {
+                        icon: "󱐋"
+                        heading: "Enable Lightning Address"
+                        checked: app.lightning.enabled === true
+                        enabled: !backend.busy && (app.lightning.enabled === true || app.mints.length > 0)
+                        busy: backend.busy && backend.pendingMethod === "set_lightning"
+                        onToggled: app.setLightning({enabled: !app.lightning.enabled})
+                    }
+                    Entry {
+                        visible: app.lightning.enabled === true && !!app.lightning.address
+                        icon: app.lightning.status === "error" ? "󰅙" : app.lightning.status === "connected" ? "󰄬" : "󰔟"
+                        iconColor: app.lightning.status === "error" ? Color.urgent : app.lightning.status === "connected" ? app.received : Color.foreground
+                        heading: app.lightning.address || ""
+                        detail: app.lightning.status === "error" ? "Needs attention" : app.lightning.status === "connected" ? "Connected" : "Connecting"
+                        trailing: "󰐲"
+                        onClicked: app.showQr("Lightning Address", app.lightning.address)
+                    }
+                    Secondary { visible: app.lightning.enabled === true && !!app.lightning.address; text: clipboard.running ? "Copied · waiting for paste" : "Copy address"; enabled: !clipboard.running; onClicked: app.copyText(app.lightning.address) }
+                    Footer { visible: app.lightning.enabled !== true; text: app.mints.length > 0 ? "Receive Lightning payments to your wallet using a Lightning address." : "Add a mint first to use a Lightning address." }
+                    Label { visible: app.lightning.status === "error"; text: app.lightning.error || "Wallet not fully initialized. Try setup again to finish your Lightning address."; color: Color.urgent; Layout.fillWidth: true }
+                    Action { visible: app.lightning.status === "error"; text: backend.busy ? "Setting up…" : "Try setup again"; enabled: !backend.busy; onClicked: app.setLightning({}) }
+                    Footer { visible: app.lightning.status === "connecting"; text: "Setting up Lightning address…" }
+                    Caption { visible: app.lightning.status === "connected"; text: "PREFERENCES" }
+                    ToggleRow { visible: app.lightning.status === "connected"; icon: "󰁝"; heading: "Auto-claim payments"; checked: app.lightning.auto_claim === true; enabled: !backend.busy; onToggled: app.setLightning({auto_claim: !app.lightning.auto_claim}) }
+                    Entry {
+                        visible: app.lightning.status === "connected" && app.mints.length > 0
+                        icon: "󰭎"
+                        heading: "Receiving mint"
+                        trailing: (app.lightning.mint ? app.mintName(app.lightning.mint) : "Select a mint") + (app.mints.length > 1 ? "  ›" : "")
+                        enabled: !backend.busy && app.mints.length > 1
+                        Accessible.name: "Receiving mint: " + (app.lightning.mint ? app.mintName(app.lightning.mint) : "none") + ". Choose which mint claims incoming Lightning payments"
+                        onClicked: app.setLightning({mint: app.nextMintAfter(app.lightning.mint)})
+                    }
+                    Footer { visible: app.lightning.status === "connected"; text: "Incoming payments are minted as ecash at your chosen mint." }
+                    Entry {
+                        visible: app.lightning.enabled === true
+                        icon: backend.busy && backend.pendingMethod === "check_lightning" ? "󰔟" : "󰑐"
+                        heading: "Check for payments"
+                        detail: app.lightning.last_checked ? "Last checked " + app.ago(app.lightning.last_checked) : "Not checked yet"
+                        trailing: ""
+                        enabled: !backend.busy && app.privacy.check_incoming !== false
+                        onClicked: backend.request("check_lightning")
+                    }
+                    Footer { visible: app.lightning.enabled === true && app.privacy.check_incoming === false; text: "To check for payments, allow incoming invoice checks in Privacy settings." }
+                }
+                // ---- Payments → Locked Ecash (P2PK)
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "locked"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: "Locked Ecash"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: "Lock ecash to a key so only its holder can claim it — even if the token is intercepted in transit."; opacity: 0.65; Layout.fillWidth: true }
+                    Caption { text: "YOUR KEY" }
+                    KeyCard {
+                        visible: !!app.locked.seed_key
+                        title: "Your key"
+                        status: "Backed up by your seed phrase"
+                        pubkey: app.locked.seed_key || ""
+                        onShowQr: app.showQr("Your Key", app.locked.seed_key)
+                        onReveal: { app.revealKeyId = ""; app.revealTitle = "Your Key"; app.go("key_reveal") }
+                        revealLabel: "Reveal key"
+                    }
+                    Footer { visible: !app.locked.seed_key; text: "Your key appears once your wallet finishes setting up." }
+                    Footer { visible: !!app.locked.seed_key; text: "Show your QR or share this key, and anyone can send you locked ecash. The key comes from your seed phrase, so only you can claim it." }
+                    Caption { text: "WHEN SENDING" }
+                    ToggleRow { icon: "󰌾"; heading: "Quick lock to my key"; detail: "Show a “Lock to my key” shortcut when sending ecash."; checked: app.locked.quick_lock === true; enabled: !backend.busy; onToggled: backend.request("set_quick_lock", {enabled: !app.locked.quick_lock}) }
+                    Entry { icon: "󰇘"; heading: "Advanced keys"; detail: app.deviceKeys.length === 0 ? "Add a key that lives only on this device" : app.deviceKeys.length === 1 ? "1 device key" : app.deviceKeys.length + " device keys"; onClicked: app.go("advanced_keys") }
+                    Entry { icon: "󰋽"; heading: "How locking works"; onClicked: app.go("locked_help") }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "locked_help"
+                    Layout.fillWidth: true
+                    spacing: Style.space(18)
+                    Label { text: "Locked ecash"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Repeater {
+                        model: [
+                            {icon: "󰍁", text: "Ecash is bearer cash. Whoever holds a token can spend it — like a banknote."},
+                            {icon: "󰌾", text: "Locking ties a token to a key. Even if it's intercepted in transit, only the key's holder can claim it."},
+                            {icon: "󰌆", text: "Your key comes from your seed phrase, so it's backed up automatically. Share your key or QR, and anyone can send you locked ecash."},
+                            {icon: "󰒊", text: "When you send, you can lock ecash to someone else's key so only they can claim it."}
+                        ]
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: Style.space(14)
+                            Label { text: modelData.icon; font.pixelSize: Style.font.heading; opacity: 0.8; Layout.alignment: Qt.AlignTop }
+                            Label { text: modelData.text; Layout.fillWidth: true }
+                        }
+                    }
+                    Action { text: "Got it"; onClicked: app.back() }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "advanced_keys"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: "Advanced Keys"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Entry { icon: "󰐕"; heading: "Generate a key"; trailing: ""; enabled: !backend.busy; onClicked: backend.request("generate_key") }
+                    Entry { icon: "󰇚"; heading: "Import a key"; trailing: app.importingKey ? "" : "›"; enabled: !backend.busy; onClicked: app.importingKey = !app.importingKey }
+                    Label { visible: app.importingKey; text: "Paste a private key (nsec) to add it. You'll be able to claim ecash locked to it."; opacity: 0.65; Layout.fillWidth: true }
+                    Ui.TextField { id: importKeyField; visible: app.importingKey; password: true; placeholderText: "nsec1…"; Layout.fillWidth: true; text: app.importKeyText; onTextEdited: app.importKeyText = text; onAccepted: if (importKeyButton.enabled) importKeyButton.clicked() }
+                    Action { id: importKeyButton; visible: app.importingKey; text: backend.busy ? "Importing…" : "Import key"; enabled: !backend.busy && app.importKeyText.trim() !== ""; onClicked: backend.request("import_key", {text: app.importKeyText.trim()}) }
+                    Footer { visible: app.deviceKeys.length === 0; text: "Device-only keys are stored on this device, not in your seed backup. If you lose this device, ecash locked to them is gone — keep amounts small." }
+                    Caption { visible: app.deviceKeys.length > 0; text: "DEVICE KEYS" }
+                    Repeater {
+                        model: app.deviceKeys
+                        delegate: Entry {
+                            required property var modelData
+                            icon: "󰌆"
+                            heading: modelData.nickname || app.shortKey(modelData.pubkey)
+                            detail: "Device only" + (modelData.used_count === 1 ? " · Used once" : modelData.used_count > 1 ? " · Used " + modelData.used_count + " times" : "")
+                            onClicked: { app.deviceKeyId = modelData.id; app.go("device_key") }
+                        }
+                    }
+                    Footer { visible: app.deviceKeys.length > 0; text: "These keys aren't in your seed backup. Back up each one, or keep amounts small." }
+                }
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "device_key"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: app.deviceKey.nickname || "Device key"; font.bold: true; font.pixelSize: Style.font.heading }
+                    KeyCard {
+                        title: app.deviceKey.nickname || "Device key"
+                        status: "On this device only — not in your seed backup"
+                        statusColor: Color.urgent
+                        pubkey: app.deviceKey.pubkey || ""
+                        revealLabel: "Back up key"
+                        onShowQr: app.showQr("Key", app.deviceKey.pubkey)
+                        onReveal: { app.revealKeyId = app.deviceKey.id; app.revealTitle = "Back up key"; app.go("key_reveal") }
+                    }
+                    Caption { text: "NAME" }
+                    Ui.TextField {
+                        id: keyNameField
+                        Layout.fillWidth: true
+                        placeholderText: "Add a name"
+                        text: app.deviceKey.nickname || ""
+                        onEditingFinished: if (text !== (app.deviceKey.nickname || "")) backend.request("rename_key", {key_id: app.deviceKey.id, nickname: text})
+                    }
+                    Entry { icon: "󰆴"; heading: "Remove Key"; trailing: ""; destructive: true; enabled: !backend.busy; onClicked: removeKeyDialog.opened = true }
+                    Footer { text: "Ecash locked to this key can only be claimed with it. Removing it can't be undone — back it up first if you might still receive to it." }
+                }
+                // ---- A private key, revealed on request. With App Lock on the
+                // password is asked for first, as for the seed phrase.
+                ColumnLayout {
+                    id: revealPage
+                    readonly property bool revealed: backend.revealedKey !== ""
+                    visible: app.walletVisible && !backend.review && app.page === "key_reveal"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
+                    Label { text: app.revealTitle; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: "Anyone with this key can claim ecash locked to it. Never share it."; opacity: 0.65; Layout.fillWidth: true }
+                    Ui.TextField { id: revealKeyPassword; visible: !revealPage.revealed && backend.state.password_required === true; password: true; placeholderText: "Wallet password"; Layout.fillWidth: true; onAccepted: if (revealKeyButton.enabled) revealKeyButton.clicked() }
+                    Action {
+                        id: revealKeyButton
+                        visible: !revealPage.revealed
+                        text: backend.busy ? "Revealing…" : "Reveal Private Key"
+                        enabled: !backend.busy && (backend.state.password_required !== true || revealKeyPassword.text.length > 0)
+                        onClicked: backend.request("reveal_key", {key_id: app.revealKeyId, password: revealKeyPassword.text})
+                    }
+                    Rectangle {
+                        visible: revealPage.revealed
+                        Layout.fillWidth: true
+                        implicitHeight: revealedText.implicitHeight + Style.space(24)
+                        radius: Style.cornerRadius
+                        color: Qt.alpha(Color.foreground, 0.07)
+                        Label { id: revealedText; anchors.fill: parent; anchors.margins: Style.space(12); text: backend.revealedKey; font.pixelSize: Style.font.caption; wrapMode: Text.WrapAnywhere; Accessible.name: "Private key, " + backend.revealedKey }
+                    }
+                    Action { visible: revealPage.revealed; text: clipboard.running ? "Copied · waiting for paste" : "Copy Private Key"; enabled: !clipboard.running; onClicked: app.copyText(backend.revealedKey) }
+                    Secondary { visible: revealPage.revealed; text: "Hide key"; onClicked: backend.revealedKey = "" }
+                    Footer { visible: revealPage.revealed; text: "This page hides the key after one minute." }
+                }
+                // ---- A QR for any text: the Lightning address or a key.
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "qr"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
+                    Label { text: app.qrTitle; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Image { source: backend.qrView.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(app.compact ? 220 : 280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
+                    Label { text: backend.qrView.qr_text || ""; font.pixelSize: Style.font.caption; opacity: 0.8; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; horizontalAlignment: Text.AlignHCenter }
+                    Action { text: clipboard.running ? "Copied · waiting for paste" : "Copy"; enabled: !clipboard.running; onClicked: app.copyText(backend.qrView.qr_text || "") }
+                    Secondary { text: "Done"; onClicked: app.back() }
+                }
+                // ---- Privacy
+                ColumnLayout {
+                    visible: app.walletVisible && !backend.review && app.page === "privacy"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    Label { text: "Privacy"; font.bold: true; font.pixelSize: Style.font.heading }
+                    ToggleRow { heading: "Check incoming invoices"; detail: "Checks for incoming payments while the app is open, contacting the mint each time. Off, the wallet doesn't check on its own."; checked: app.privacy.check_incoming !== false; enabled: !backend.busy; onToggled: app.setPrivacy({check_incoming: !app.privacy.check_incoming}) }
+                    ToggleRow { heading: "Repeat checks on a timer"; detail: "Every half minute while the app is open, each check contacting the mint. Off, the wallet checks only once when it opens."; checked: app.privacy.repeat_checks !== false; enabled: !backend.busy && app.privacy.check_incoming !== false; onToggled: app.setPrivacy({repeat_checks: !app.privacy.repeat_checks}) }
+                    ToggleRow { heading: "Check sent ecash"; detail: "Asks the mint whether sent ecash was claimed, while the app is open. Off, the wallet stays quiet and you check manually instead."; checked: app.privacy.check_sent !== false; enabled: !backend.busy; onToggled: app.setPrivacy({check_sent: !app.privacy.check_sent}) }
+                    ToggleRow { heading: "Paste ecash automatically"; detail: "Reads a Cashu token from the clipboard when the receive page opens."; checked: app.privacy.auto_paste !== false; enabled: !backend.busy; onToggled: app.setPrivacy({auto_paste: !app.privacy.auto_paste}) }
+                    Footer { text: "Checks contact the mint over the network — more checks mean faster updates, fewer give the mint less to see." }
                 }
             }
         }
@@ -1282,6 +1724,35 @@ ShellRoot {
                 model: [{id:"home", label:"Wallet"}, {id:"history", label:"History"}, {id:"mints", label:"Mints"}]
                 delegate: Tab { required property var modelData; text: modelData.label; selected: app.page === modelData.id; Layout.fillHeight: true; enabled: !backend.busy; onClicked: app.tab(modelData.id) }
             }
+        }
+        // Confirmations use Omarchy's own dialog, the desktop counterpart of
+        // the reference's confirmation sheets.
+        Ui.ConfirmDialog {
+            id: deleteDialog
+            anchors.fill: parent
+            z: 10
+            message: "Delete wallet?\n\nThis deletes the wallet from this device. Make sure you have backed up your seed phrase before continuing. This cannot be undone."
+            confirmText: "Delete"
+            onCanceled: opened = false
+            onConfirmed: { opened = false; backend.request("delete_wallet") }
+        }
+        Ui.ConfirmDialog {
+            id: replaceDialog
+            anchors.fill: parent
+            z: 10
+            message: "Replace this wallet?\n\nRestoring installs the wallet for the words you entered in place of the current one. Make sure the current wallet's seed phrase is backed up first. This cannot be undone."
+            confirmText: "Replace"
+            onCanceled: opened = false
+            onConfirmed: { opened = false; app.restoreReplacing = true; backend.request("delete_wallet") }
+        }
+        Ui.ConfirmDialog {
+            id: removeKeyDialog
+            anchors.fill: parent
+            z: 10
+            message: "Remove this key?\n\nEcash locked to this key can only be claimed with it. This cannot be undone."
+            confirmText: "Remove Key"
+            onCanceled: opened = false
+            onConfirmed: { opened = false; backend.request("remove_key", {key_id: app.deviceKeyId}) }
         }
         }
     }

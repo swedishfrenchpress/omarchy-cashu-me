@@ -28,6 +28,15 @@ QtObject {
     // Emitted only once the worker has accepted a request, so callers can clear
     // the secret they submitted without discarding it on a recoverable failure.
     signal succeeded(string method)
+    // The request the worker refused, once its error is set.
+    signal failed(string method)
+    // One mint's restore result, for the restore page's per-mint rows.
+    signal restored(var result)
+    // A QR the interface asked for (make_qr, or a key's own request).
+    signal qrReady(var result)
+    property var qrView: ({})
+    // A private key shown on request. Cleared with the recovery phrase.
+    property string revealedKey: ""
 
     function request(method, fields) {
         if (!ready || busy || preview) return
@@ -49,6 +58,8 @@ QtObject {
         ready = false
         error = ""
         recoveryPhrase = ""
+        revealedKey = ""
+        qrView = {}
         notice = ""
         review = null
         reviewId = ""
@@ -88,9 +99,11 @@ QtObject {
             // Resolve only the outstanding request. The worker also emits
             // {"id":null} for input it could not parse, which is a reply to
             // nothing and must never release a live request.
+            var refused = ""
             if (message.id !== undefined && message.id !== null && message.id === pendingId) {
                 busy = false
                 finished = message.error ? "" : pendingMethod
+                refused = message.error ? pendingMethod : ""
                 pendingId = 0
                 pendingMethod = ""
             }
@@ -116,12 +129,19 @@ QtObject {
                 recoveryPhrase = message.result.phrase
                 phraseTimer.restart()
             }
+            if (message.result && message.result.nsec) {
+                revealedKey = message.result.nsec
+                phraseTimer.restart()
+            }
+            if (message.result && message.result.recovered !== undefined) restored(message.result)
+            if (message.result && message.result.qr_text) { qrView = message.result; qrReady(message.result) }
             if (message.result && message.result.security_updated) notice = "Security settings updated."
             if (message.result && message.result.display_updated) notice = "Display settings updated."
             if (message.result && message.result.mint_added) { notice = "Mint added."; mintAdded() }
             if (message.result && message.result.backup_saved) notice = "Encrypted backup saved."
             if (message.event === "fatal") ready = false
             if (finished !== "") succeeded(finished)
+            if (refused !== "") failed(refused)
         } catch (_) {
             lock()
             error = "Invalid response from the wallet worker."
@@ -139,6 +159,8 @@ QtObject {
             root.state = {unlocked: false, exists: root.state.exists, password_required: root.state.password_required, mints: [], selected: null}
             root.ready = false
             root.recoveryPhrase = ""
+            root.revealedKey = ""
+            root.qrView = {}
             root.review = null
             root.reviewId = ""
             root.share = {}
@@ -171,6 +193,6 @@ QtObject {
     }
     property Timer phraseTimer: Timer {
         interval: 60000
-        onTriggered: root.recoveryPhrase = ""
+        onTriggered: { root.recoveryPhrase = ""; root.revealedKey = "" }
     }
 }

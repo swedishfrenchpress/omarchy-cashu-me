@@ -14,19 +14,35 @@ use serde_json::Value;
 /// ever reaching the price request. The flag is decorative, as in cashu.me's
 /// own currency picker; it is not a claim about where a currency is legal
 /// tender.
+/// The same 26 currencies, in the same order, as cashubtc/wallet's
+/// `supportedFiatCurrencies`.
 pub const CURRENCIES: &[(&str, &str, &str, &str)] = &[
     ("USD", "US Dollar", "$", "🇺🇸"),
     ("EUR", "Euro", "€", "🇪🇺"),
-    ("GBP", "British Pound", "£", "🇬🇧"),
-    ("JPY", "Japanese Yen", "¥", "🇯🇵"),
-    ("CHF", "Swiss Franc", "Fr", "🇨🇭"),
-    ("CAD", "Canadian Dollar", "$", "🇨🇦"),
     ("AUD", "Australian Dollar", "$", "🇦🇺"),
-    ("CNY", "Chinese Yuan", "¥", "🇨🇳"),
-    ("INR", "Indian Rupee", "₹", "🇮🇳"),
     ("BRL", "Brazilian Real", "R$", "🇧🇷"),
-    ("MXN", "Mexican Peso", "$", "🇲🇽"),
+    ("CAD", "Canadian Dollar", "$", "🇨🇦"),
+    ("CHF", "Swiss Franc", "Fr", "🇨🇭"),
+    ("CNY", "Chinese Yuan", "¥", "🇨🇳"),
+    ("CZK", "Czech Koruna", "Kč", "🇨🇿"),
+    ("DKK", "Danish Krone", "kr", "🇩🇰"),
+    ("GBP", "British Pound", "£", "🇬🇧"),
+    ("HKD", "Hong Kong Dollar", "$", "🇭🇰"),
+    ("HUF", "Hungarian Forint", "Ft", "🇭🇺"),
+    ("ILS", "Israeli New Shekel", "₪", "🇮🇱"),
+    ("INR", "Indian Rupee", "₹", "🇮🇳"),
+    ("JPY", "Japanese Yen", "¥", "🇯🇵"),
     ("KRW", "South Korean Won", "₩", "🇰🇷"),
+    ("MXN", "Mexican Peso", "$", "🇲🇽"),
+    ("NZD", "New Zealand Dollar", "$", "🇳🇿"),
+    ("NOK", "Norwegian Krone", "kr", "🇳🇴"),
+    ("PLN", "Polish Złoty", "zł", "🇵🇱"),
+    ("RUB", "Russian Ruble", "₽", "🇷🇺"),
+    ("SEK", "Swedish Krona", "kr", "🇸🇪"),
+    ("SGD", "Singapore Dollar", "$", "🇸🇬"),
+    ("THB", "Thai Baht", "฿", "🇹🇭"),
+    ("TRY", "Turkish Lira", "₺", "🇹🇷"),
+    ("ZAR", "South African Rand", "R", "🇿🇦"),
 ];
 
 pub fn is_supported(code: &str) -> bool {
