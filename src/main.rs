@@ -142,6 +142,10 @@ async fn main() {
             return;
         }
     };
+    if let Err(error) = storage.finish_pending_delete() {
+        emit(json!({"event":"fatal","error":error}));
+        return;
+    }
     emit(
         json!({"event":"state","state":{"unlocked":false,"exists":storage.exists(),"password_required":storage.exists() && access::Access::new(&storage.path).password_required(),"version":env!("CARGO_PKG_VERSION")}}),
     );
@@ -201,6 +205,7 @@ async fn main() {
                     } else { emit(json!({"id":request.id,"error":"Unlock the wallet first."})); }
                     continue;
                 }
+                let mut shutdown = false;
                 let password = Zeroizing::new(std::mem::take(&mut request.password));
                 let phrase = Zeroizing::new(std::mem::take(&mut request.phrase));
                 let result: wallet::Result<Value> = match request.method.as_str() {
@@ -233,9 +238,13 @@ async fn main() {
                     // Settings → Danger → Delete Wallet. The session is consumed so
                     // every database handle closes before the files go; the
                     // interface then returns to onboarding.
+                    // With a session open the worker exits after replying, so no
+                    // pool can recreate the database; the interface restarts it.
+                    // Locked, nothing holds the files and they simply go: the way
+                    // out for someone who has forgotten their password.
                     "delete_wallet" => match session.take() {
-                        Some(open) => open.delete(&storage).map(|_| json!({"wallet_deleted":true})),
-                        None => Err("Unlock the wallet first.")
+                        Some(open) => open.delete(&storage).map(|_| { shutdown = true; json!({"wallet_deleted":true,"worker_exits":true}) }),
+                        None => storage.delete_files().map(|_| json!({"wallet_deleted":true})),
                     },
                     "set_password" => match session.as_mut() {
                         Some(session) => session.set_password(&password).map(|_| json!({"security_updated":true})),
@@ -351,6 +360,7 @@ async fn main() {
                     ),
                     None => {}
                 }
+                if shutdown { break; }
             }
             _ = ticker.tick(), if session.is_some() => {
                 if let Some(session) = session.as_mut() {

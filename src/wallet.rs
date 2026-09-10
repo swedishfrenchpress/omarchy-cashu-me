@@ -189,6 +189,46 @@ impl Storage {
     pub fn exists(&self) -> bool {
         self.path.exists()
     }
+
+    /// Removes every file the wallet owns: the database and its journals,
+    /// the device key and the password vault. Exported backups are the
+    /// user's and are left alone. Safe only while nothing holds the
+    /// database open, which is why an open session exits after asking.
+    pub fn delete_files(&self) -> Result<()> {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut name = self
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("wallet.sqlite")
+                .to_owned();
+            name.push_str(suffix);
+            let path = self.path.with_file_name(name);
+            if path.exists() {
+                fs::remove_file(&path).map_err(|_| "Could not delete the wallet database.")?;
+            }
+        }
+        Access::new(&self.path).delete()?;
+        let marker = self.path.with_file_name("deleted");
+        if marker.exists() {
+            fs::remove_file(&marker).map_err(|_| "Could not finish deleting the wallet.")?;
+        }
+        Ok(())
+    }
+
+    /// A delete leaves this marker so the next start, with no connection
+    /// pool alive, removes anything a closing pool recreated.
+    pub fn mark_deleted(&self) -> Result<()> {
+        fs::write(self.path.with_file_name("deleted"), b"")
+            .map_err(|_| "Could not record the wallet deletion.")
+    }
+
+    pub fn finish_pending_delete(&self) -> Result<()> {
+        if self.path.with_file_name("deleted").exists() {
+            self.delete_files()?;
+        }
+        Ok(())
+    }
 }
 
 pub struct Session {
@@ -700,27 +740,14 @@ impl Session {
         }
     }
 
-    /// Removes every file the wallet owns. The session is consumed first so
-    /// no open connection outlives its database. Backups a user exported
-    /// are theirs and are left alone.
+    /// Consumes the session and removes the wallet's files. CDK's pool may
+    /// still recreate an empty database as it winds down, so the caller
+    /// exits the process afterwards and the marker has the next start
+    /// sweep up anything left.
     pub fn delete(self, storage: &Storage) -> Result<()> {
-        let access = Access::new(&storage.path);
         drop(self);
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let mut name = storage
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("wallet.sqlite")
-                .to_owned();
-            name.push_str(suffix);
-            let path = storage.path.with_file_name(name);
-            if path.exists() {
-                fs::remove_file(&path).map_err(|_| "Could not delete the wallet database.")?;
-            }
-        }
-        access.delete()?;
-        Ok(())
+        storage.delete_files()?;
+        storage.mark_deleted()
     }
 
     pub async fn snapshot(&self) -> Result<Value> {

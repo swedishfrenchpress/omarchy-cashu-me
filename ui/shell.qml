@@ -271,7 +271,7 @@ ShellRoot {
     }
     function beginRestore() {
         app.restoreNotice = ""
-        if (app.walletVisible) { replaceDialog.opened = true; return }
+        if (backend.state.exists) { replaceDialog.opened = true; return }
         app.restoreInstall()
     }
     function restoreInstall() {
@@ -327,7 +327,10 @@ ShellRoot {
         onShowResult: { app.revealShare = false; app.trail = []; app.page = "share" }
         onPaymentFinished: { app.trail = []; app.page = "complete" }
         onMintAdded: { app.trail = []; app.page = "home" }
-        onReadyChanged: app.maybeOpen()
+        onReadyChanged: {
+            app.maybeOpen()
+            if (backend.ready && app.restoreReplacing && !backend.state.exists) { app.restoreReplacing = false; app.restoreInstall() }
+        }
         onStateChanged: app.maybeOpen()
         onErrorChanged: if (backend.error) contentScroll.contentItem.contentY = 0
         onNoticeChanged: if (backend.notice) { app.toast(backend.notice); backend.notice = "" }
@@ -339,7 +342,9 @@ ShellRoot {
             if (method === "validate_phrase") app.restoreStep = "mints"
             if (method === "restore_phrase") { app.trail = []; app.page = "restore"; app.restoreStep = "progress"; app.restoreRunNext() }
             if (method === "delete_wallet") {
-                if (app.restoreReplacing) { app.restoreReplacing = false; app.restoreMode = true; app.restoreInstall() }
+                // With the worker exiting, the restore waits for its restart
+                // (see onReadyChanged); locked, the files are already gone.
+                if (app.restoreReplacing) { app.restoreMode = true; if (!backend.restarting) { app.restoreReplacing = false; app.restoreInstall() } }
                 else { app.trail = []; app.page = "home"; app.restoreMode = false }
             }
             if (method === "set_password" || method === "remove_password") { securityPassword.clear(); securityConfirmation.clear(); currentPassword.clear(); app.appLockMode = "" }
@@ -376,7 +381,7 @@ ShellRoot {
             deleteDialog.opened = false
             replaceDialog.opened = false
             removeKeyDialog.opened = false
-            app.restoreReplacing = false
+            freshDialog.opened = false
         }
     }
     DesktopLock {
@@ -919,7 +924,7 @@ ShellRoot {
                     onRestoreRequested: { app.startRestore(); app.restoreMode = true }
                 }
                 ColumnLayout {
-                    visible: !app.walletVisible && backend.state.exists
+                    visible: !app.walletVisible && backend.state.exists && !app.restoreMode
                     Layout.fillWidth: true
                     spacing: Style.space(16)
                     Label { text: backend.state.password_required === false ? "Welcome back" : "Unlock your wallet"; font.bold: true; font.pixelSize: Style.font.heading }
@@ -939,6 +944,13 @@ ShellRoot {
                             && (backend.state.password_required === false || password.text.length > 0)
                         onClicked: backend.request("unlock", {password: password.text})
                     }
+                    // The way out when the password is gone. Funds live at the
+                    // mints, so the wallet on this computer can be replaced.
+                    Divider { visible: backend.state.password_required !== false; Layout.topMargin: Style.space(8) }
+                    Label { visible: backend.state.password_required !== false; text: "Forgot your password?"; font.bold: true }
+                    Footer { visible: backend.state.password_required !== false; text: "Your funds are safe. They live at your mints, not on this computer. Restore with your recovery phrase to set up this wallet again with a new password. Without the phrase, a fresh wallet starts from zero." }
+                    Secondary { visible: backend.state.password_required !== false; text: "Restore with recovery phrase"; enabled: backend.ready && !backend.busy; onClicked: { app.startRestore(); app.restoreMode = true } }
+                    Secondary { visible: backend.state.password_required !== false; text: "Start a fresh wallet"; enabled: backend.ready && !backend.busy; onClicked: freshDialog.opened = true }
                 }
                 Label { visible: !app.walletVisible && !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
                 Label { visible: !app.walletVisible && !backend.ready && !backend.error; text: "Starting cashu.me…"; opacity: 0.65; Layout.fillWidth: true }
@@ -953,7 +965,7 @@ ShellRoot {
                     readonly property int mintCount: app.restoreMintList.length
                     readonly property bool allSettled: app.restoreMintList.length > 0 && app.restoreMintList.every(mint => ["done", "failed"].indexOf((app.restoreResults[mint.url] || {}).status) >= 0)
                     readonly property double recoveredTotal: app.restoreMintList.reduce((sum, mint) => sum + Number((app.restoreResults[mint.url] || {}).recovered || 0), 0)
-                    visible: !backend.review && ((app.walletVisible && app.page === "restore") || (!app.walletVisible && !backend.state.exists && app.restoreMode))
+                    visible: !backend.review && ((app.walletVisible && app.page === "restore") || (!app.walletVisible && app.restoreMode))
                     Layout.fillWidth: true
                     spacing: Style.space(16)
                     // Step 1: seed
@@ -1834,6 +1846,15 @@ ShellRoot {
                 Accessible.name: toastHost.message
             }
             Timer { id: toastTimer; interval: 2200; onTriggered: toastHost.shown = false }
+        }
+        Ui.ConfirmDialog {
+            id: freshDialog
+            anchors.fill: parent
+            z: 10
+            message: "Start a fresh wallet?\n\nThe wallet on this computer will be removed. Any ecash it holds can only be recovered with its recovery phrase. This cannot be undone."
+            confirmText: "Start fresh"
+            onCanceled: opened = false
+            onConfirmed: { opened = false; backend.request("delete_wallet") }
         }
         Ui.ConfirmDialog {
             id: removeKeyDialog

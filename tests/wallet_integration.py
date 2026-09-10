@@ -188,10 +188,15 @@ class WalletIntegration(unittest.TestCase):
                 self.assertIn("error", alice.call("validate_phrase", phrase="invalid words"))
                 alice.ok("validate_phrase", phrase=phrase)
                 self.assertIn("error", alice.call("restore_phrase", phrase=phrase, mint_urls=[MINT]))
-                alice.ok("delete_wallet")
+                # Deleting an open wallet ends the worker so CDK's pool cannot
+                # recreate the database behind it; the next start sweeps up.
+                self.assertTrue(alice.ok("delete_wallet")["worker_exits"])
+                alice.process.wait(timeout=10); alice.close()
+                alice = Worker(directory / "alice"); workers.append(alice)
                 self.assertFalse(alice.state()["exists"])
                 self.assertFalse((directory / "alice" / "wallet.sqlite").exists())
                 self.assertFalse((directory / "alice" / "access.sqlite").exists())
+                self.assertFalse((directory / "alice" / "device.key").exists())
                 alice.ok("restore_phrase", phrase=phrase, mint_urls=[MINT], password="")
                 self.assertTrue(alice.state()["restoring"])
                 result = alice.ok("restore_mint", url=MINT)
@@ -202,6 +207,15 @@ class WalletIntegration(unittest.TestCase):
                 self.assertEqual(state["mints"][0]["spendable"], expected)
                 self.assertEqual(state["mints"][0]["name"], "cashu.me test mint")
                 self.assertIn("error", alice.call("send_ecash", amount="99999999"))
+                # The forgotten-password way out: a locked wallet can be deleted
+                # without opening it, and a fresh one created after.
+                bob.close()
+                bob = Worker(directory / "bob"); workers.append(bob)
+                self.assertTrue(bob.state()["password_required"])
+                bob.ok("delete_wallet")
+                self.assertFalse(bob.state()["exists"])
+                bob.ok("create", password="")
+                self.assertFalse(bob.state()["password_required"])
             finally:
                 for worker in workers:
                     worker.close()

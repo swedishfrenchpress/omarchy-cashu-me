@@ -135,6 +135,9 @@ QtObject {
             }
             if (message.result && message.result.recovered !== undefined) restored(message.result)
             if (message.result && message.result.qr_text) { qrView = message.result; qrReady(message.result) }
+            // A delete with a session open ends the worker; come back locked
+            // and wallet-less rather than treating the exit as a crash.
+            if (message.result && message.result.worker_exits) { restarting = true; lockTimer.restart() }
             if (message.result && message.result.mint_added) { notice = "Mint added"; mintAdded() }
             if (message.event === "fatal") ready = false
             if (finished !== "") succeeded(finished)
