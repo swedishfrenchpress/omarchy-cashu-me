@@ -54,10 +54,6 @@ pub(crate) struct Settings {
     pub(crate) lightning: LightningAddress,
     #[serde(default)]
     pub(crate) locked: Locked,
-    // Sends taken back with Reclaim. CDK records a revoked send as failed,
-    // which is not what happened; these ids let history say "Reclaimed".
-    #[serde(default)]
-    pub(crate) reclaimed: Vec<String>,
 }
 
 /// Settings → Privacy, after cashubtc/wallet. Each one only decides which
@@ -614,17 +610,6 @@ impl Session {
         Ok(())
     }
 
-    pub fn note_reclaimed(&mut self, operation_id: uuid::Uuid) {
-        let id = cdk::wallet::types::TransactionId::from_saga_id(operation_id).to_string();
-        if !self.settings.reclaimed.contains(&id) {
-            self.settings.reclaimed.push(id);
-            if self.settings.reclaimed.len() > 500 {
-                self.settings.reclaimed.remove(0);
-            }
-            let _ = self.save_settings();
-        }
-    }
-
     pub fn select_mint(&mut self, url: &str) -> Result<()> {
         if !self.wallets.contains_key(url) {
             return Err("Add this mint before selecting it.");
@@ -949,10 +934,8 @@ impl Session {
                 } else {
                     None
                 };
-                let id = tx.id().to_string();
-                let reclaimed = self.settings.reclaimed.contains(&id);
-                recent.push((tx.timestamp, json!({"id":id,"amount":tx.amount.to_string(),"fee":tx.fee.to_string(),
-                    "direction":tx.direction.to_string(),"status":tx.status.to_string(),"timestamp":tx.timestamp,"reclaimed":reclaimed,
+                recent.push((tx.timestamp, json!({"id":tx.id().to_string(),"amount":tx.amount.to_string(),"fee":tx.fee.to_string(),
+                    "direction":tx.direction.to_string(),"status":tx.status.to_string(),"timestamp":tx.timestamp,
                     "kind":if tx.payment_method.is_some() {"Lightning"} else {"Ecash"},
                     "mint":mint.url.clone(),"mint_name":mint.name.clone(),"operation_id":operation_id})));
             }

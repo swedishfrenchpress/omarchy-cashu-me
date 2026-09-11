@@ -179,8 +179,6 @@ class WalletIntegration(unittest.TestCase):
                 self.assertEqual(reopened["mint"], MINT)
                 reclaimed = alice.ok("reclaim_token", operation_id=pending["operation_id"])
                 self.assertEqual(reclaimed["amount"], "8")
-                # History remembers the send as reclaimed, not failed.
-                self.assertTrue(any(row["reclaimed"] and row["amount"] == "8" for row in alice.state()["history"]))
 
                 invoice = bob.ok("create_invoice", amount="10")
                 paid = alice.confirm("pay_invoice", text=invoice["invoice"])

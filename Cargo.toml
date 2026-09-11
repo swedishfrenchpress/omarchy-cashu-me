@@ -24,7 +24,6 @@ zeroize = "1"
 # crate is compiled in through cdk's npubcash feature regardless.
 nostr-sdk = { version = "0.44", default-features = false }
 url = "2"
-uuid = "1"
 fs2 = "0.4"
 libc = "0.2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
