@@ -168,6 +168,8 @@ ShellRoot {
         page = trail.length ? trail[trail.length - 1] : "home"
         trail = trail.slice(0, -1)
     }
+    // Leaving a reveal page is what hides its secret; the pages carry no
+    // Hide button of their own, since Back does the same.
     onPageChanged: {
         contentScroll.contentItem.contentY = 0
         if (page !== "recovery") backend.recoveryPhrase = ""
@@ -1946,7 +1948,6 @@ ShellRoot {
                         enabled: !clipboard.running
                         onClicked: app.copyText(backend.recoveryPhrase, "recovery phrase")
                     }
-                    Secondary { visible: recoveryPage.revealed; text: "Hide phrase"; onClicked: backend.recoveryPhrase = "" }
                 }
                 // ---- App Lock: the reference's one toggle, with a password in
                 // place of Face ID. Turning it on asks for a new password here
@@ -2170,7 +2171,6 @@ ShellRoot {
                         Label { id: revealedText; anchors.fill: parent; anchors.margins: Style.space(12); text: backend.revealedKey; font.pixelSize: Style.font.caption; wrapMode: Text.WrapAnywhere; Accessible.name: "Private key, " + backend.revealedKey }
                     }
                     Action { visible: revealPage.revealed; text: "Copy Private Key"; enabled: !clipboard.running; onClicked: app.copyText(backend.revealedKey, "private key") }
-                    Secondary { visible: revealPage.revealed; text: "Hide key"; onClicked: backend.revealedKey = "" }
                     Footer { visible: revealPage.revealed; text: "This page hides the key after one minute." }
                 }
                 // ---- A QR for any text: the Lightning address or a key.
