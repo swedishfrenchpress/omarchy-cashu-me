@@ -1394,11 +1394,13 @@ ShellRoot {
                     visible: app.walletVisible && !backend.review && app.page === "share"
                     Layout.fillWidth: true
                     // Sized so the QR, amount, mint and copy button all fit
-                    // the panel without scrolling; only the notes and Done
-                    // sit below the fold.
+                    // the panel without scrolling.
                     spacing: Style.space(app.compact ? 12 : 20)
-                    // After the reference: title, the code, Copy, the amount, an
-                    // expiry countdown for an invoice, then label/value rows.
+                    // After the reference: title, the code, the amount, an
+                    // expiry countdown for an invoice, label/value rows, and
+                    // Copy pinned to the bottom of the panel as a secondary
+                    // action, never a primary one under the code.
+                    Layout.preferredHeight: app.pinnedHeight(implicitHeight)
                     readonly property bool tokenClaimed: !!backend.share.token && !!backend.share.operation_id && !(backend.state.pending_sends || []).some(send => send.id === backend.share.operation_id)
                     readonly property double expiresIn: backend.share.expiry ? backend.share.expiry - app.now / 1000 : 0
                     Timer { running: app.page === "share" && !!backend.share.expiry; interval: 1000; repeat: true; triggeredOnStart: true; onTriggered: app.now = Date.now() }
@@ -1428,12 +1430,6 @@ ShellRoot {
                         Accessible.name: shareQr.frames.length > 1 ? "Animated QR code, " + shareQr.speeds[shareQr.speed].name + " speed. Tap to change the speed" : "QR code"
                     }
                     Label { visible: shareQr.frames.length > 1; text: "Animated code · " + shareQr.speeds[shareQr.speed].name + " · tap to change speed"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Action {
-                        text: "Copy"
-                        enabled: !clipboard.running
-                        Layout.fillWidth: true
-                        onClicked: app.copyText(backend.share.token || backend.share.invoice || "", backend.share.token ? "ecash token" : "invoice")
-                    }
                     AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
                     Label { visible: !!backend.share.expiry; text: parent.expiresIn > 0 ? "󰔟  Expires in " + app.remaining(parent.expiresIn) : "Expired"; color: parent.expiresIn > 0 ? Color.foreground : app.destructive; opacity: parent.expiresIn > 0 ? 0.6 : 1; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: parent.tokenClaimed; text: "󰄬  Claimed"; color: app.received; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
@@ -1441,6 +1437,14 @@ ShellRoot {
                     DetailRow { heading: "Unit"; value: "SAT" }
                     DetailRow { visible: app.fiatAvailable && !!backend.share.amount; heading: "Fiat"; value: app.fiatText(backend.share.amount) }
                     DetailRow { heading: "Mint"; value: (backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name) }
+                    Item { Layout.fillHeight: true }
+                    // The reference titles the invoice's button "Copy Invoice"
+                    // and the token's plain "Copy", then Check Status below it.
+                    Secondary {
+                        text: backend.share.token ? "Copy" : "Copy Invoice"
+                        enabled: !clipboard.running
+                        onClicked: app.copyText(backend.share.token || backend.share.invoice || "", backend.share.token ? "ecash token" : "invoice")
+                    }
                     Secondary { visible: !!backend.share.token && !parent.tokenClaimed; text: backend.busy ? "Checking…" : "Check Status"; enabled: !backend.busy; onClicked: backend.request("sync") }
                 }
                 ColumnLayout {
