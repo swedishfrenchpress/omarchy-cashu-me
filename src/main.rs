@@ -360,6 +360,14 @@ async fn main() {
                         Some(session) => session.add_mint(&request.url).await.map(|_| json!({"mint_added":true})),
                         None => Err("Unlock the wallet first.")
                     },
+                    "mint_info" => match &session {
+                        Some(session) => session.mint_info(&request.url).await.map(|info| json!({"mint_info": info})),
+                        None => Err("Unlock the wallet first.")
+                    },
+                    "remove_mint" => match session.as_mut() {
+                        Some(session) => session.remove_mint(&request.url).map(|_| json!({"mint_removed":true})),
+                        None => Err("Unlock the wallet first.")
+                    },
                     "select_mint" => match session.as_mut() {
                         Some(session) => session.select_mint(&request.url).map(|_| json!({})),
                         None => Err("Unlock the wallet first.")

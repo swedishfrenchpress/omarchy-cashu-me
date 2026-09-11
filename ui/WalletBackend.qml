@@ -35,6 +35,8 @@ QtObject {
     // A QR the interface asked for (make_qr, or a key's own request).
     signal qrReady(var result)
     property var qrView: ({})
+    // What a mint reports about itself, for the mint page.
+    property var mintInfo: ({})
     // A private key shown on request. Cleared with the recovery phrase.
     property string revealedKey: ""
 
@@ -60,6 +62,7 @@ QtObject {
         recoveryPhrase = ""
         revealedKey = ""
         qrView = {}
+        mintInfo = {}
         notice = ""
         review = null
         reviewId = ""
@@ -135,6 +138,7 @@ QtObject {
             }
             if (message.result && message.result.recovered !== undefined) restored(message.result)
             if (message.result && message.result.qr_text) { qrView = message.result; qrReady(message.result) }
+            if (message.result && message.result.mint_info) mintInfo = message.result.mint_info
             // A delete with a session open ends the worker; come back locked
             // and wallet-less rather than treating the exit as a crash.
             if (message.result && message.result.worker_exits) { restarting = true; lockTimer.restart() }
@@ -161,6 +165,7 @@ QtObject {
             root.recoveryPhrase = ""
             root.revealedKey = ""
             root.qrView = {}
+            root.mintInfo = {}
             root.review = null
             root.reviewId = ""
             root.share = {}

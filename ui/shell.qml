@@ -231,8 +231,26 @@ ShellRoot {
         return app.mints.length ? app.mints[(index + 1) % app.mints.length].url : ""
     }
     function showQr(title, text) { app.qrTitle = title; backend.request("make_qr", {text: text}) }
+    // The mint page: an added mint or a suggestion, with what it reports.
+    property string mintView: ""
+    function openMint(url) { app.mintView = url; app.go("mint"); backend.request("mint_info", {url: url}) }
+    function suggestionFor(url) { return app.suggestions.find(mint => mint.url === url) || ({}) }
+    function contactLink(method, info) {
+        var m = String(method).toLowerCase(), value = String(info).trim()
+        if (/^https?:\/\//i.test(value)) return value
+        if (m === "email") return "mailto:" + value
+        if (m === "twitter" || m === "x") return "https://x.com/" + value.replace(/^@/, "")
+        if (m === "telegram") return "https://t.me/" + value.replace(/^@/, "")
+        return ""
+    }
     function copyText(text, what) { app.clipboardText = text; clipboard.stdinEnabled = true; clipboard.running = true; if (what) app.toast("Copied " + what) }
     function shortKey(key) { return key && key.length > 20 ? key.slice(0, 10) + "…" + key.slice(-8) : (key || "") }
+    function remaining(seconds) {
+        var total = Math.max(0, Math.floor(seconds))
+        if (total >= 3600) return Math.floor(total / 3600) + "h " + Math.floor((total % 3600) / 60) + "m"
+        if (total >= 60) return Math.floor(total / 60) + "m " + (total % 60) + "s"
+        return total + "s"
+    }
     function ago(seconds) {
         if (!seconds) return ""
         var elapsed = Math.max(0, Math.floor(Date.now() / 1000 - seconds))
@@ -352,6 +370,7 @@ ShellRoot {
             if (method === "reveal_key") revealKeyPassword.clear()
             if (method === "import_key") { app.importKeyText = ""; app.importingKey = false }
             if (method === "remove_key") app.back()
+            if (method === "remove_mint") { app.trail = []; app.page = "mints" }
             if (method === "make_qr") { if (app.page !== "qr") app.go("qr") }
             if (method === "locked_request") { if (app.page !== "qr") app.go("qr") }
         }
@@ -381,6 +400,7 @@ ShellRoot {
             deleteDialog.opened = false
             replaceDialog.opened = false
             removeKeyDialog.opened = false
+            removeMintDialog.opened = false
             freshDialog.opened = false
         }
     }
@@ -627,6 +647,23 @@ ShellRoot {
         tooltipText: Accessible.name
         opacity: enabled ? 1 : 0.4
     }
+    // A mint's icon in a bordered square, the monogram of its name until
+    // the icon loads or when the mint has none.
+    component MintAvatar: Rectangle {
+        id: avatar
+        property string source: ""
+        property string name: ""
+        property int size: Style.space(36)
+        width: size
+        height: size
+        radius: Style.cornerRadius
+        clip: true
+        color: Qt.alpha(Color.foreground, 0.07)
+        border.width: 1
+        border.color: Qt.alpha(Color.foreground, 0.25)
+        Image { id: avatarImage; anchors.fill: parent; anchors.margins: 1; source: avatar.source; fillMode: Image.PreserveAspectCrop; asynchronous: true; smooth: true; visible: status === Image.Ready }
+        Label { anchors.centerIn: parent; visible: !avatarImage.visible; text: avatar.name.trim().charAt(0).toUpperCase(); font.bold: true; font.pixelSize: Math.round(avatar.size * 0.45) }
+    }
     component SquareIcon: IconButton {
         bordered: true
         implicitWidth: implicitHeight
@@ -790,6 +827,9 @@ ShellRoot {
         property string icon: ""
         property color iconColor: Color.foreground
         property bool destructive: false
+        // A mint row shows its avatar instead of an icon.
+        property string avatar: ""
+        property string monogram: ""
         // Opt-in slot for "this is the active one" among a set of entries
         // (the selected mint, say). It occupies constant width and only its
         // opacity changes, so switching selection never reflows the row the
@@ -807,7 +847,8 @@ ShellRoot {
             anchors.fill: parent
             anchors.margins: Style.space(12)
             spacing: Style.space(16)
-            Label { visible: entry.icon !== ""; text: entry.icon; color: entry.destructive ? app.destructive : entry.iconColor; font.pixelSize: Style.font.heading; opacity: entry.destructive || entry.iconColor !== Color.foreground ? 1 : 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignVCenter }
+            MintAvatar { visible: entry.monogram !== ""; source: entry.avatar; name: entry.monogram; Layout.alignment: Qt.AlignVCenter }
+            Label { visible: entry.icon !== "" && entry.monogram === ""; text: entry.icon; color: entry.destructive ? app.destructive : entry.iconColor; font.pixelSize: Style.font.heading; opacity: entry.destructive || entry.iconColor !== Color.foreground ? 1 : 0.8; Layout.preferredWidth: Style.space(28); horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignVCenter }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
@@ -860,7 +901,7 @@ ShellRoot {
             item.outputName = Qt.binding(() => app.outputName)
             // A review holds reserved funds. Require an explicit confirm or
             // cancel rather than hiding it on a stray click outside the panel.
-            item.suspendDismissal = Qt.binding(() => imageDialog.visible || scanner.running || !!backend.review || deleteDialog.opened || replaceDialog.opened || removeKeyDialog.opened)
+            item.suspendDismissal = Qt.binding(() => imageDialog.visible || scanner.running || !!backend.review || deleteDialog.opened || replaceDialog.opened || removeKeyDialog.opened || removeMintDialog.opened)
             item.dismissed.connect(() => app.dismiss(false, true))
         }
     }
@@ -1355,44 +1396,51 @@ ShellRoot {
                     // the panel without scrolling; only the notes and Done
                     // sit below the fold.
                     spacing: Style.space(app.compact ? 12 : 20)
-                    Label { text: backend.share.token ? "Pending ecash" : "Lightning invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    // A long token animates through its NUT-16 frames at the
-                    // reference's medium speed; anything else is one code.
-                    Image {
+                    // After the reference: title, the code, Copy, the amount, an
+                    // expiry countdown for an invoice, then label/value rows.
+                    readonly property bool tokenClaimed: !!backend.share.token && !!backend.share.operation_id && !(backend.state.pending_sends || []).some(send => send.id === backend.share.operation_id)
+                    readonly property double expiresIn: backend.share.expiry ? backend.share.expiry - app.now / 1000 : 0
+                    Timer { running: app.page === "share" && !!backend.share.expiry; interval: 1000; repeat: true; triggeredOnStart: true; onTriggered: app.now = Date.now() }
+                    Label { text: backend.share.token ? "Pending Ecash" : "Lightning Invoice"; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    // A long token animates through its NUT-16 frames; each new
+                    // frame fades in over the last so the code never strobes.
+                    Item {
                         id: shareQr
                         property var frames: backend.share.qr_frames || []
                         property int frame: 0
-                        source: frames.length > 0 ? frames[frame % frames.length] : (backend.share.qr || "")
-                        visible: source.toString() !== ""
+                        property string previous: ""
+                        readonly property string current: frames.length > 0 ? frames[frame % frames.length] : (backend.share.qr || "")
+                        visible: current !== ""
                         Layout.alignment: Qt.AlignHCenter
                         Layout.preferredWidth: Math.min(app.compact ? 180 : 280, contentScroll.availableWidth)
                         Layout.preferredHeight: Layout.preferredWidth
-                        fillMode: Image.PreserveAspectFit
-                        onFramesChanged: frame = 0
-                        // The reference's three speeds, cycled by tapping the code.
+                        onFramesChanged: { frame = 0; previous = "" }
+                        onCurrentChanged: { ghost.opacity = 1; ghostFade.restart() }
                         property int speed: 1
                         readonly property var speeds: [{name: "fast", interval: 100}, {name: "medium", interval: 300}, {name: "slow", interval: 500}]
-                        Timer { running: shareQr.visible && shareQr.frames.length > 1 && app.page === "share"; interval: shareQr.speeds[shareQr.speed].interval; repeat: true; onTriggered: shareQr.frame = (shareQr.frame + 1) % shareQr.frames.length }
+                        Image { anchors.fill: parent; source: shareQr.current; fillMode: Image.PreserveAspectFit; cache: true }
+                        Image { id: ghost; anchors.fill: parent; source: shareQr.previous; fillMode: Image.PreserveAspectFit; opacity: 0; cache: true }
+                        NumberAnimation { id: ghostFade; target: ghost; property: "opacity"; from: 1; to: 0; duration: motion.reduced ? 0 : 140; onStopped: shareQr.previous = shareQr.current }
+                        Timer { running: shareQr.visible && shareQr.frames.length > 1 && app.page === "share"; interval: shareQr.speeds[shareQr.speed].interval; repeat: true; onTriggered: { shareQr.previous = shareQr.current; shareQr.frame = (shareQr.frame + 1) % shareQr.frames.length } }
                         TapHandler { enabled: shareQr.frames.length > 1; onTapped: { shareQr.speed = (shareQr.speed + 1) % shareQr.speeds.length; app.toast("Animation " + shareQr.speeds[shareQr.speed].name) } }
                         Accessible.role: Accessible.Button
                         Accessible.name: shareQr.frames.length > 1 ? "Animated QR code, " + shareQr.speeds[shareQr.speed].name + " speed. Tap to change the speed" : "QR code"
                     }
                     Label { visible: shareQr.frames.length > 1; text: "Animated code · " + shareQr.speeds[shareQr.speed].name + " · tap to change speed"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    // Shown in the unit the amount was typed in, with the
-                    // other beneath, so a dollar request still reads as one.
-                    AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
-                    Label { text: backend.share.token ? "Ready to share" : "Waiting for payment"; opacity: 0.6; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-                    Label { visible: !!backend.share.token && !backend.share.qr; text: "Too large for one QR code. Copy the token to share it."; Layout.fillWidth: true }
                     Action {
-                        text: backend.share.token ? "Copy token" : "Copy invoice"
+                        text: "Copy"
                         enabled: !clipboard.running
                         Layout.fillWidth: true
                         onClicked: app.copyText(backend.share.token || backend.share.invoice || "", backend.share.token ? "ecash token" : "invoice")
                     }
-                    DetailRow { heading: "Mint"; value: backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name; leading: true }
-                    DetailRow { visible: !!backend.share.expiry; heading: "Expires"; value: app.momentFor(backend.share.expiry); leading: true }
-                    Label { text: backend.share.token ? "Anyone holding this token can redeem it. Reopen or reclaim it from History." : "You can close this window. Your unlocked wallet keeps checking for payment."; opacity: 0.6; Layout.fillWidth: true }
-                    Secondary { text: "Done"; onClicked: app.back() }
+                    AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
+                    Label { visible: !!backend.share.expiry; text: parent.expiresIn > 0 ? "󰔟  Expires in " + app.remaining(parent.expiresIn) : "Expired"; color: parent.expiresIn > 0 ? Color.foreground : app.destructive; opacity: parent.expiresIn > 0 ? 0.6 : 1; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { visible: parent.tokenClaimed; text: "󰄬  Claimed"; color: app.received; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+                    DetailRow { visible: !!backend.share.token && Number(backend.share.fee || 0) > 0; heading: "Fee"; value: app.primaryAmount(backend.share.fee) }
+                    DetailRow { heading: "Unit"; value: "SAT" }
+                    DetailRow { visible: app.fiatAvailable && !!backend.share.amount; heading: "Fiat"; value: app.fiatText(backend.share.amount) }
+                    DetailRow { heading: "Mint"; value: (backend.share.mint ? app.mintName(backend.share.mint) : app.selectedMint.name) }
+                    Secondary { visible: !!backend.share.token && !parent.tokenClaimed; text: backend.busy ? "Checking…" : "Check Status"; enabled: !backend.busy; onClicked: backend.request("sync") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "complete"
@@ -1418,17 +1466,88 @@ ShellRoot {
                         model: backend.state.mints || []
                         delegate: Entry {
                             required property var modelData
+                            avatar: modelData.icon_url || app.suggestionFor(modelData.url).icon_url || ""
+                            monogram: modelData.name
                             heading: modelData.name
-                            detail: modelData.url + (modelData.sync === "retrying" ? " · unavailable" : "")
-                            trailing: app.amountLabel(modelData.spendable)
-                            showsActiveMark: true
-                            selected: modelData.url === backend.state.selected
+                            detail: (modelData.url === backend.state.selected ? "Default · " : "") + modelData.url.replace(/^https?:\/\//, "") + (modelData.sync === "retrying" ? " · unavailable" : "")
+                            trailing: app.primaryAmount(modelData.spendable) + "  ›"
                             enabled: !backend.busy
-                            onClicked: backend.request("select_mint", {url: modelData.url})
+                            onClicked: app.openMint(modelData.url)
                         }
                     }
                     Entry { icon: "󰐕"; heading: "Add mint"; onClicked: app.go("add_mint") }
-                    Label { text: "Each mint holds a separate balance; the wallet shows their total. The checked mint is used for new payments, and you can switch it when entering an amount."; opacity: 0.6; Layout.fillWidth: true }
+                    Footer { text: "Each mint holds a separate balance; the wallet shows their total. The default mint is used for new payments, and you can switch it when entering an amount." }
+                }
+                // The mint page, after the reference's MintDetailView: what the
+                // mint reports about itself, then Add, Set as Default, or Remove.
+                ColumnLayout {
+                    id: mintPage
+                    readonly property var added: app.mints.find(mint => mint.url === app.mintView) || null
+                    readonly property var info: backend.mintInfo && backend.mintInfo.url === app.mintView ? backend.mintInfo : ({})
+                    readonly property bool loading: backend.busy && backend.pendingMethod === "mint_info"
+                    readonly property string displayName: info.name || (added ? added.name : "") || app.suggestionFor(app.mintView).name || app.mintView.replace(/^https?:\/\//, "")
+                    readonly property bool isDefault: !!added && backend.state.selected === app.mintView
+                    readonly property var nutLabels: ({"7": "Token state check", "8": "Lightning fee return", "9": "Restore from seed", "10": "Spending conditions", "11": "P2PK locking", "12": "DLEQ proofs", "14": "HTLCs", "20": "WebSocket updates"})
+                    visible: app.walletVisible && !backend.review && app.page === "mint"
+                    Layout.fillWidth: true
+                    spacing: Style.space(14)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.space(14)
+                        MintAvatar { source: mintPage.info.icon_url || (mintPage.added ? mintPage.added.icon_url : "") || app.suggestionFor(app.mintView).icon_url || ""; name: mintPage.displayName; size: Style.space(56) }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            spacing: Style.space(4)
+                            Label { text: mintPage.displayName; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+                            Label { text: app.mintView.replace(/^https?:\/\//, ""); opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true; elide: Text.ElideMiddle; wrapMode: Text.NoWrap }
+                            Label { visible: mintPage.isDefault; text: "󰄬  Default mint"; color: app.received; font.pixelSize: Style.font.caption }
+                        }
+                    }
+                    AmountDisplay { visible: !!mintPage.added; amount: mintPage.added ? mintPage.added.spendable : 0; size: Style.space(32); animated: false }
+                    Footer { text: mintPage.loading ? "Checking…" : mintPage.info.url ? "Online" : backend.error ? "Unreachable · showing saved information." : "" }
+                    Caption { visible: !!mintPage.info.description || !!mintPage.info.description_long; text: "ABOUT" }
+                    Label { visible: !!mintPage.info.description; text: mintPage.info.description || ""; Layout.fillWidth: true }
+                    Label { visible: !!mintPage.info.description_long; text: mintPage.info.description_long || ""; opacity: 0.65; Layout.fillWidth: true }
+                    Caption { visible: !!mintPage.info.motd; text: "MESSAGE FROM THE MINT" }
+                    Label { visible: !!mintPage.info.motd; text: mintPage.info.motd || ""; Layout.fillWidth: true }
+                    Caption { visible: !!mintPage.info.nuts; text: "CAPABILITIES" }
+                    Repeater {
+                        model: mintPage.info.nuts || []
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: Style.space(12)
+                            spacing: Style.space(12)
+                            Label { text: modelData.supported ? "󰄬" : "󰅖"; color: modelData.supported ? app.received : Color.foreground; opacity: modelData.supported ? 1 : 0.35; Layout.preferredWidth: Style.space(20) }
+                            Label { text: "NUT-" + (modelData.nut.length < 2 ? "0" : "") + modelData.nut; opacity: 0.55; font.pixelSize: Style.font.caption; Layout.preferredWidth: Style.space(56) }
+                            Label { text: mintPage.nutLabels[modelData.nut] || ""; Layout.fillWidth: true }
+                        }
+                    }
+                    Caption { visible: !!mintPage.info.url; text: "PAYMENT METHODS" }
+                    DetailRow { visible: !!mintPage.info.url; heading: "󰁅  Receive"; value: (mintPage.info.receive_methods || []).join(" · ") || "None"; leading: true }
+                    DetailRow { visible: !!mintPage.info.url; heading: "󰁝  Send"; value: (mintPage.info.send_methods || []).join(" · ") || "None"; leading: true }
+                    Caption { visible: (mintPage.info.contact || []).length > 0; text: "CONTACT" }
+                    Repeater {
+                        model: mintPage.info.contact || []
+                        delegate: Entry {
+                            required property var modelData
+                            icon: "󰆼"
+                            heading: modelData.method.charAt(0).toUpperCase() + modelData.method.slice(1)
+                            detail: modelData.info
+                            trailing: app.contactLink(modelData.method, modelData.info) ? "󰏌" : ""
+                            enabled: app.contactLink(modelData.method, modelData.info) !== ""
+                            onClicked: Qt.openUrlExternally(app.contactLink(modelData.method, modelData.info))
+                        }
+                    }
+                    Caption { visible: !!mintPage.info.version || !!mintPage.info.tos_url; text: "DETAILS" }
+                    DetailRow { visible: !!mintPage.info.version; heading: "Software"; value: mintPage.info.version || ""; leading: true }
+                    Entry { visible: !!mintPage.info.tos_url; icon: "󰈙"; heading: "Terms of service"; trailing: "󰏌"; onClicked: Qt.openUrlExternally(mintPage.info.tos_url) }
+                    Footer { visible: !!mintPage.info.url; text: "Information reported by the mint." }
+                    Footer { visible: !mintPage.added; text: "Mints are run by third parties; this wallet isn't affiliated with any of them. Only add a mint you trust." }
+                    Action { visible: !mintPage.added; text: backend.busy && backend.pendingMethod === "add_mint" ? "Adding mint…" : "Add mint"; enabled: backend.unlocked && !backend.busy; onClicked: backend.request("add_mint", {url: app.mintView}) }
+                    Action { visible: !!mintPage.added && !mintPage.isDefault; text: "Set as Default"; enabled: !backend.busy; onClicked: backend.request("select_mint", {url: app.mintView}) }
+                    Entry { visible: !!mintPage.added; icon: "󰆴"; heading: "Remove mint"; trailing: ""; destructive: true; enabled: !backend.busy; onClicked: removeMintDialog.opened = true }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "add_mint"
@@ -1440,7 +1559,7 @@ ShellRoot {
                     // any other mint, with or without its https://.
                     Repeater {
                         model: app.suggestions
-                        delegate: Entry { required property var modelData; icon: "󰭎"; heading: modelData.name; detail: modelData.url.replace(/^https?:\/\//, ""); trailing: app.mints.some(mint => mint.url === modelData.url) ? "Added" : "›"; enabled: backend.unlocked && !backend.busy && !app.mints.some(mint => mint.url === modelData.url); onClicked: backend.request("add_mint", {url: modelData.url}) }
+                        delegate: Entry { required property var modelData; avatar: modelData.icon_url || ""; monogram: modelData.name; heading: modelData.name; detail: modelData.url.replace(/^https?:\/\//, ""); trailing: app.mints.some(mint => mint.url === modelData.url) ? "Added  ›" : "›"; enabled: backend.unlocked && !backend.busy; onClicked: app.openMint(modelData.url) }
                     }
                     Caption { text: "OTHER MINT" }
                     PasteField { placeholderText: "mint.example.com"; target: "mint"; text: app.mintUrl; onEdited: text => app.mintUrl = text; onAccepted: if (addMintButton.enabled) addMintButton.clicked() }
@@ -1924,6 +2043,15 @@ ShellRoot {
             confirmText: "Start fresh"
             onCanceled: opened = false
             onConfirmed: { opened = false; backend.request("delete_wallet") }
+        }
+        Ui.ConfirmDialog {
+            id: removeMintDialog
+            anchors.fill: parent
+            z: 10
+            message: "Remove mint?\n\nRemove " + mintPage.displayName + " from your wallet? Any unspent ecash on this mint will need to be restored from your seed phrase."
+            confirmText: "Remove"
+            onCanceled: opened = false
+            onConfirmed: { opened = false; backend.request("remove_mint", {url: app.mintView}) }
         }
         Ui.ConfirmDialog {
             id: removeKeyDialog

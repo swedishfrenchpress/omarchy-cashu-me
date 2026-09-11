@@ -85,6 +85,17 @@ class WalletIntegration(unittest.TestCase):
                 for worker in [alice, bob]:
                     worker.ok("create", password=PASSWORD)
                     worker.ok("add_mint", url=MINT)
+                # The mint page reads what the mint reports, for added and
+                # suggested mints alike; removing one forgets it and its default.
+                info = alice.ok("mint_info", url=MINT)["mint_info"]
+                self.assertEqual((info["name"], info["added"]), ("cashu.me test mint", True))
+                self.assertTrue(any(nut["nut"] == "9" and nut["supported"] for nut in info["nuts"]))
+                self.assertIn("bolt11", info["receive_methods"])
+                self.assertIn("error", alice.call("mint_info", url="https://127.0.0.1:1"))
+                bob.ok("remove_mint", url=MINT)
+                self.assertEqual(bob.state()["mints"], [])
+                self.assertIsNone(bob.state()["selected"])
+                bob.ok("add_mint", url=MINT)
                 invoice = alice.ok("create_invoice", amount="128")
                 self.assertTrue(invoice["invoice"].startswith("ln"))
                 self.assertTrue(invoice["qr"].startswith("data:image/svg+xml;base64,"))
@@ -166,7 +177,7 @@ class WalletIntegration(unittest.TestCase):
                 self.assertTrue(reopened["token"].startswith("cashu"))
                 self.assertEqual(reopened["amount"], "8")
                 self.assertEqual(reopened["mint"], MINT)
-                reclaimed = alice.confirm("reclaim_token", operation_id=pending["operation_id"])
+                reclaimed = alice.ok("reclaim_token", operation_id=pending["operation_id"])
                 self.assertEqual(reclaimed["amount"], "8")
 
                 invoice = bob.ok("create_invoice", amount="10")

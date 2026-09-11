@@ -27,6 +27,17 @@ pub type Result<T> = std::result::Result<T, &'static str>;
 pub struct Mint {
     pub url: String,
     pub name: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+}
+
+/// A mint's icon URL as it reports it, kept only when it is an http(s) URL.
+fn clean_icon_url(value: Option<&str>) -> Option<String> {
+    let url = value?.trim();
+    url::Url::parse(url)
+        .ok()
+        .filter(|parsed| matches!(parsed.scheme(), "https" | "http"))
+        .map(|_| url.to_owned())
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -325,6 +336,7 @@ impl Session {
                 settings.mints.push(Mint {
                     name: url.clone(),
                     url,
+                    icon_url: None,
                 });
             }
         }
@@ -479,6 +491,7 @@ impl Session {
         self.settings.mints.push(Mint {
             url: url.clone(),
             name,
+            icon_url: clean_icon_url(info["icon_url"].as_str()),
         });
         let previous = self.settings.selected.replace(url.clone());
         if let Err(error) = self.save_settings() {
@@ -487,6 +500,113 @@ impl Session {
             return Err(error);
         }
         self.wallets.insert(url, wallet);
+        Ok(())
+    }
+
+    /// Everything the mint says about itself, for the mint page. Works for
+    /// a mint that is not added yet, so a suggestion can be looked at first.
+    pub async fn mint_info(&self, input: &str) -> Result<Value> {
+        let url = validate_mint_url(input)?;
+        let temporary;
+        let wallet = match self.wallets.get(&url) {
+            Some(wallet) => wallet,
+            None => {
+                temporary = self.make_wallet(&url)?;
+                &temporary
+            }
+        };
+        let info =
+            match tokio::time::timeout(Duration::from_secs(15), wallet.fetch_mint_info()).await {
+                Err(_) => return Err("This mint did not respond in time."),
+                Ok(Err(error)) => {
+                    note(&format!("{url} fetch_mint_info"), &error);
+                    return Err("This mint could not be reached.");
+                }
+                Ok(Ok(None)) => return Err("This mint did not return its information."),
+                Ok(Ok(Some(info))) => info,
+            };
+        let info = serde_json::to_value(info).map_err(|_| "Cannot read mint information.")?;
+        let nuts = &info["nuts"];
+        let methods = |nut: &str| -> Vec<String> {
+            nuts[nut]["methods"]
+                .as_array()
+                .map(|methods| {
+                    methods
+                        .iter()
+                        .filter_map(|method| method["method"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let supported: Vec<Value> = ["7", "8", "9", "10", "11", "12", "14", "20"]
+            .iter()
+            .map(|nut| json!({"nut": nut, "supported": nuts[*nut]["supported"] == true}))
+            .collect();
+        let contact: Vec<Value> = info["contact"]
+            .as_array()
+            .map(|contacts| {
+                contacts
+                    .iter()
+                    .filter_map(|contact| {
+                        let method = contact["method"].as_str()?;
+                        let value = contact["info"].as_str()?;
+                        Some(json!({"method": method, "info": value}))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let version = info["version"].as_object().map(|version| {
+            format!(
+                "{} {}",
+                version["name"].as_str().unwrap_or(""),
+                version["version"].as_str().unwrap_or("")
+            )
+            .trim()
+            .to_owned()
+        });
+        let clean = |value: &Value| clean_mint_name(value.as_str().unwrap_or_default());
+        Ok(json!({"url": url, "added": self.wallets.contains_key(&url),
+            "name": clean(&info["name"]), "description": info["description"].as_str().unwrap_or("").trim(),
+            "description_long": info["description_long"].as_str().unwrap_or("").trim(),
+            "motd": info["motd"].as_str().unwrap_or("").trim(),
+            "icon_url": clean_icon_url(info["icon_url"].as_str()), "version": version,
+            "tos_url": clean_icon_url(info["tos_url"].as_str()),
+            "contact": contact, "nuts": supported,
+            "receive_methods": methods("4"), "send_methods": methods("5")}))
+    }
+
+    /// Forgets a mint. Its proofs stay in the database and come back with
+    /// the mint, or with a restore from the seed, as the reference warns.
+    pub fn remove_mint(&mut self, url: &str) -> Result<()> {
+        let index = self
+            .settings
+            .mints
+            .iter()
+            .position(|mint| mint.url == url)
+            .ok_or("This mint is not in your wallet.")?;
+        let previous = std::mem::take(&mut self.settings.mints);
+        let previous_selected = self.settings.selected.clone();
+        let previous_lightning = self.settings.lightning.clone();
+        self.settings.mints = previous.clone();
+        let removed = self.settings.mints.remove(index);
+        if self.settings.selected.as_deref() == Some(url) {
+            self.settings.selected = self.settings.mints.first().map(|mint| mint.url.clone());
+        }
+        if self.settings.lightning.mint.as_deref() == Some(url) {
+            self.settings.lightning.mint = None;
+            self.settings.lightning.enabled = false;
+        }
+        if let Err(error) = self.save_settings() {
+            self.settings.mints = previous;
+            self.settings.selected = previous_selected;
+            self.settings.lightning = previous_lightning;
+            return Err(error);
+        }
+        self.wallets.remove(&removed.url);
+        self.sync_status.remove(&removed.url);
+        if !self.settings.lightning.enabled {
+            self.lightning_ready = false;
+        }
         Ok(())
     }
 
@@ -600,10 +720,11 @@ impl Session {
             tokio::time::timeout(Duration::from_secs(15), wallet.fetch_mint_info()).await
         {
             let name = clean_mint_name(info.name.as_deref().unwrap_or_default());
-            if !name.is_empty() {
-                if let Some(mint) = self.settings.mints.iter_mut().find(|mint| mint.url == url) {
+            if let Some(mint) = self.settings.mints.iter_mut().find(|mint| mint.url == url) {
+                if !name.is_empty() {
                     mint.name = name;
                 }
+                mint.icon_url = clean_icon_url(info.icon_url.as_deref());
             }
         }
         let wallet = self
@@ -769,7 +890,7 @@ impl Session {
                 .total_reserved_balance()
                 .await
                 .map_err(|_| "Cannot read reserved balance.")?;
-            mints.push(json!({"url": mint.url, "name": mint.name, "spendable": if self.settings.needs_restore {"0".to_owned()} else {spendable.to_string()},
+            mints.push(json!({"url": mint.url, "name": mint.name, "icon_url": mint.icon_url, "spendable": if self.settings.needs_restore {"0".to_owned()} else {spendable.to_string()},
                 "pending": pending.to_string(), "reserved": reserved.to_string(),
                 "sync": self.sync_status.get(&mint.url).unwrap_or(&"waiting")}));
         }

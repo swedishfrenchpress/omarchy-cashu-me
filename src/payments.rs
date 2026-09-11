@@ -115,12 +115,13 @@ pub async fn run(
                     return Ok(json!({"cancelled":true}));
                 }
                 let mint = wallet.mint_url.to_string();
+                let fee = prepared.fee().to_string();
                 let token = prepared.confirm(None).await.map_err(|error| {
                     note("send confirm", &error);
                     "Send outcome needs reconciliation. Check history and pending transfers before retrying."
                 })?;
                 if !lock_to.is_empty() { session.note_key_used(lock_to); }
-                Ok(json!({"token":token.to_string(),"amount":amount.to_string(),"operation_id":operation_id,"mint":mint}))
+                Ok(json!({"token":token.to_string(),"amount":amount.to_string(),"fee":fee,"operation_id":operation_id,"mint":mint}))
             }
             "pay_invoice" => {
                 let wallet = session.selected_wallet()?;
@@ -201,12 +202,8 @@ pub async fn run(
                 // whichever mint happens to be selected.
                 let wallet = session.wallet_for_operation(&request.operation_id).await?;
                 let operation_id = request.operation_id.parse().map_err(|_| "Invalid transfer reference.")?;
-                let review = json!({"kind":"Reclaim unspent ecash","mint":wallet.mint_url.to_string(),"reclaim":true});
-                let Some((id, confirmed)) = decision(request.id, review, receiver).await else {
-                    std::process::exit(0);
-                };
-                reply_id = id;
-                if !confirmed { return Ok(json!({"cancelled":true})); }
+                // No review: taking back one's own unclaimed ecash needs no
+                // second look, and the reference offers none.
                 let amount = bounded("revoke_send", 30,
                     "Reclaim is unresolved. The wallet will reconcile this transfer's status.",
                     "Cannot reclaim this token. It may already be spent; the wallet will reconcile its status.",
