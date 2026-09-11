@@ -9,6 +9,8 @@ import qs.Ui as Ui
 import "ClockFormat.js" as ClockFormat
 import "Motion.js" as Motion
 import "AsciiField.js" as Field
+import "AsciiArt.js" as Art
+import "Bip39.js" as Bip39
 
 ShellRoot {
     id: app
@@ -36,7 +38,7 @@ ShellRoot {
         backend.revealedKey = ""
         importKeyText = ""
         appLockMode = ""
-        if (page !== "restore" && !restoreMode) { restoreWordsText = ""; restoreMintList = []; restoreResults = {} }
+        if (page !== "restore" && !restoreMode) { seedReset(); restoreMintList = []; restoreResults = {} }
     }
     function dismiss(immediate, outside) {
         if (immediate === true) presentationMotion = false
@@ -57,9 +59,12 @@ ShellRoot {
     property var transaction: ({})
     property bool revealShare: false
     readonly property bool mainPage: ["home", "history", "mints"].indexOf(page) >= 0
+    // The reference's History filter is by status, All / Pending / Completed,
+    // not by direction; a failed payment shows only under All.
     readonly property var activity: (backend.state.history || []).filter(tx => {
-        var direction = historyFilter === "all" || (historyFilter === "received" ? tx.direction === "Incoming" : tx.direction === "Outgoing")
-        return direction && (app.titleFor(tx) + " " + tx.status + " " + tx.amount + " " + (tx.mint_name || "")).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
+        var status = String(tx.status || "").toLowerCase()
+        var matches = historyFilter === "all" || (historyFilter === "pending" ? status === "pending" : status === "completed" || status === "paid")
+        return matches && (app.titleFor(tx) + " " + tx.status + " " + tx.amount + " " + (tx.mint_name || "")).toLowerCase().indexOf(historySearch.toLowerCase()) >= 0
     })
     // A space groups digits at one full monospace character's width in
     // Style.font.family, which reads as a much bigger gap between thousands
@@ -104,6 +109,9 @@ ShellRoot {
     readonly property color received: Color.background.hslLightness < 0.5 ? "#30D158" : "#34C759"
     // iOS system red for destructive rows, chosen the same way.
     readonly property color destructive: Color.background.hslLightness < 0.5 ? "#FF453A" : "#FF3B30"
+    // iOS system orange for warnings and cautions, as the reference colours
+    // "Never share these words" and its caution notices.
+    readonly property color warning: Color.background.hslLightness < 0.5 ? "#FF9F0A" : "#FF9500"
     // One ephemeral toast at the top centre, like the reference's
     // ConfirmationToast: 2.2 s, then gone. Errors stay inline.
     function toast(message) { toastHost.message = message; toastHost.shown = true; toastTimer.restart() }
@@ -166,6 +174,7 @@ ShellRoot {
         if (page !== "key_reveal") { backend.revealedKey = ""; revealKeyPassword.clear() }
         if (page !== "recovery") revealPassword.clear()
         if (page !== "app_lock") appLockMode = ""
+        if (page !== "add_mint") mintNotice = ""
         if (page !== "advanced_keys") { importingKey = false; importKeyText = "" }
         if (page === "receive" && app.privacy.auto_paste !== false && app.receiveText === "") { pasteTarget = "token"; pasteProbe.explicit = false; pasteProbe.running = false; pasteProbe.running = true }
         if (page !== "share") { backend.share = {}; app.revealShare = false }
@@ -209,6 +218,24 @@ ShellRoot {
         if (app.mints.length > 1) backend.request("select_mint", {url: app.mints[(index + 1) % app.mints.length].url})
     }
     property string mintUrl: ""
+    property string mintNotice: ""
+    // The connect page's headline: "Add a mint first" when a payment stalled
+    // for want of a mint, plain "Add mint" from the wallet home.
+    property bool connectFromPayment: false
+    function connectMint(fromPayment) { app.connectFromPayment = fromPayment === true; app.go("connect_mint") }
+    function addMintByUrl() { app.mintUrl = ""; app.mintNotice = ""; app.go("add_mint") }
+    // Adding a mint returns to the page that asked for one, as the reference's
+    // sheet dismisses onto its opener.
+    function finishAddMint() {
+        var rest = app.trail.slice()
+        var destination = "home"
+        while (rest.length) {
+            var previous = rest.pop()
+            if (["add_mint", "connect_mint", "mint"].indexOf(previous) < 0) { destination = previous; break }
+        }
+        app.trail = rest
+        app.page = destination
+    }
     property string receiveMethod: "lightning"
     property var suggestions: []
     property bool restoreMode: false
@@ -287,7 +314,7 @@ ShellRoot {
     function completeGate() {
         app.resetOnboarding()
         app.restoreMode = false; app.trail = []; app.page = "home"
-        app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {}
+        app.restoreStep = "seed"; app.seedReset(); app.restoreMintList = []; app.restoreResults = {}
         backend.recoveryPhrase = ""
     }
     // Settings state that lives in the interface. Everything the worker
@@ -352,14 +379,105 @@ ShellRoot {
     function pinnedHeight(implicit) { return Math.max(implicit, Math.min(contentScroll.availableHeight, Style.space(560)) - header.height - Style.space(app.compact ? 16 : 22)) }
     // ---- Restore flow
     property string restoreStep: "seed"
-    property string restoreWordsText: ""
-    readonly property int restoreWordCount: app.restoreWordsText.trim() === "" ? 0 : app.restoreWordsText.trim().split(/\s+/).length
+    // ---- Word-by-word seed entry, after cashubtc/wallet's SeedPhraseEntry:
+    // twelve slots, the slot at seedIndex being the live field text, so a
+    // valid but uncommitted last word arms the button with no extra state.
+    // The wordlist check is local and per word; the BIP-39 checksum needs
+    // all twelve and runs in the worker.
+    property var seedWords: ["", "", "", "", "", "", "", "", "", "", "", ""]
+    property int seedIndex: 0
+    property bool seedReviewing: false
+    property bool seedRejected: false
+    property bool seedVerified: false
+    property bool seedAutoCheck: false
+    property var seedNotice: null
+    readonly property string restoreWordsText: app.seedWords.filter(word => word !== "").join(" ")
+    readonly property int restoreWordCount: app.seedWords.filter(word => word !== "").length
+    readonly property bool seedComplete: app.seedWords.every(word => Bip39.contains(word))
+    readonly property string seedDraft: app.seedWords[app.seedIndex]
+    readonly property var seedCompletions: Bip39.completions(app.seedDraft, 3)
+    function seedReset() { seedWords = ["", "", "", "", "", "", "", "", "", "", "", ""]; seedIndex = 0; seedReviewing = false; seedRejected = false; seedVerified = false; seedAutoCheck = false; seedNotice = null }
+    function seedSet(slot, text) {
+        var words = seedWords.slice(); words[slot] = text; seedWords = words
+        seedReviewing = false; seedVerified = false
+    }
+    // Whitespace is the commit key: everything before it is a finished word
+    // and the remainder stays in the field, so a multi-word paste into the
+    // field behaves exactly like typing it.
+    function seedTyped(text) {
+        var lowered = text.toLowerCase()
+        seedRejected = false
+        if (!/\s/.test(lowered)) { seedSet(seedIndex, lowered); return "none" }
+        var chunks = lowered.split(/\s+/)
+        var outcome = "none"
+        for (var i = 0; i < chunks.length; i++) {
+            if (i === chunks.length - 1) { if (chunks[i] !== "") seedSet(seedIndex, chunks[i]) }
+            else if (chunks[i] !== "") {
+                seedSet(seedIndex, chunks[i])
+                outcome = seedCommit()
+                if (outcome === "rejected") return outcome
+            }
+        }
+        return outcome
+    }
+    // An exact match wins outright and a unique prefix completes; anything
+    // ambiguous is refused and stays in the field to be corrected.
+    function seedCommit() {
+        var candidate = seedDraft.trim().toLowerCase()
+        if (candidate === "") return "ignored"
+        var resolved
+        if (Bip39.contains(candidate)) resolved = candidate
+        else {
+            var matches = Bip39.completions(candidate, 2)
+            if (matches.length !== 1) { seedRejected = true; return "rejected" }
+            resolved = matches[0]
+        }
+        seedSet(seedIndex, resolved)
+        seedRejected = false
+        var next = seedWords.indexOf("")
+        if (next >= 0) { seedIndex = next; return "advanced" }
+        return "completed"
+    }
+    function seedStepBack() {
+        if (seedIndex === 0) return false
+        seedIndex -= 1; seedReviewing = false; seedRejected = false
+        return true
+    }
+    function seedJump(slot) { if (slot >= 0 && slot < 12) { seedIndex = slot; seedReviewing = false; seedRejected = false } }
+    // Extra words past the twelfth are dropped: only 12-word phrases restore.
+    function seedFill(pasted) {
+        var tokens = pasted.toLowerCase().split(/\s+/).filter(token => token !== "")
+        if (!tokens.some(token => Bip39.contains(token))) return "unusable"
+        var kept = tokens.slice(0, 12)
+        var words = []
+        for (var i = 0; i < 12; i++) words.push(i < kept.length ? kept[i] : "")
+        seedWords = words; seedReviewing = false; seedRejected = false; seedVerified = false
+        if (kept.length < 12) { seedIndex = kept.length; return "partial" }
+        var bad = words.findIndex(word => !Bip39.contains(word))
+        if (bad >= 0) { seedIndex = bad; return "invalid" }
+        seedIndex = 11
+        return "filled"
+    }
+    function seedHandle(outcome) {
+        if (outcome !== "ignored") seedNotice = null
+        if (outcome === "completed") seedRunChecksum()
+    }
+    function seedRunChecksum() {
+        if (!seedComplete || backend.busy) return
+        seedAutoCheck = true
+        backend.request("validate_phrase", {phrase: restoreWordsText})
+    }
+    function seedContinue() {
+        if (seedVerified) { restoreStep = "mints"; return }
+        seedAutoCheck = false
+        backend.request("validate_phrase", {phrase: restoreWordsText})
+    }
     property var restoreMintList: []
     property string restoreMintInput: ""
     property string restoreNotice: ""
     property var restoreResults: ({})
     property bool restoreReplacing: false
-    function startRestore() { restoreStep = "seed"; restoreWordsText = ""; restoreMintList = []; restoreMintInput = ""; restoreNotice = ""; restoreResults = {}; restoreReplacing = false }
+    function startRestore() { restoreStep = "seed"; seedReset(); restoreMintList = []; restoreMintInput = ""; restoreNotice = ""; restoreResults = {}; restoreReplacing = false }
     function stageRestoreMint(input) {
         var added = 0, skipped = 0
         input.split(/[\s,]+/).forEach(piece => {
@@ -383,7 +501,7 @@ ShellRoot {
     function restoreInstall() {
         app.restoreResults = {}
         var urls = app.restoreMintList.map(mint => mint.url)
-        backend.request("restore_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " "), mint_urls: urls, password: ""})
+        backend.request("restore_phrase", {phrase: app.restoreWordsText, mint_urls: urls, password: ""})
     }
     function restoreRunNext() {
         var next = app.restoreMintList.find(mint => !app.restoreResults[mint.url] || app.restoreResults[mint.url].status === "pending")
@@ -397,7 +515,7 @@ ShellRoot {
     }
     function finishRestore() {
         if (app.restoreMode) { app.finishOnboarding(); return }
-        app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {}
+        app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.seedReset(); app.restoreMintList = []; app.restoreResults = {}
     }
     function pasteInto(target) { pasteTarget = target; pasteProbe.explicit = true; pasteProbe.running = false; pasteProbe.running = true }
     property string pasteTarget: ""
@@ -438,7 +556,7 @@ ShellRoot {
         id: backend
         onShowResult: { app.revealShare = false; app.trail = []; app.page = "share" }
         onPaymentFinished: { app.trail = []; app.page = "complete" }
-        onMintAdded: { app.trail = []; app.page = "home" }
+        onMintAdded: app.finishAddMint()
         onReadyChanged: {
             app.maybeOpen()
             if (backend.ready && app.restoreReplacing && !backend.state.exists) { app.restoreReplacing = false; app.restoreInstall() }
@@ -455,7 +573,9 @@ ShellRoot {
             // hold it back from view until the handoff.
             if (method === "create") { app.resetOnboarding(); app.onboardingOpen = true; app.onboardingStep = "seed" }
             if (method === "add_mint" && app.onboardingOpen && app.firstMintQueue.length > 0) { app.firstMintQueue = app.firstMintQueue.slice(1); app.addNextFirstMint() }
-            if (method === "validate_phrase") app.restoreStep = "mints"
+            // The checksum passed: after the twelfth word it only says so, and
+            // Continue moves on; from Continue itself it moves on at once.
+            if (method === "validate_phrase") { app.seedVerified = true; app.seedNotice = null; if (!app.seedAutoCheck) app.restoreStep = "mints" }
             if (method === "restore_phrase") { app.trail = []; app.page = "restore"; app.restoreStep = "progress"; app.restoreRunNext() }
             if (method === "delete_wallet") {
                 // With the worker exiting, the restore waits for its restart
@@ -479,6 +599,9 @@ ShellRoot {
                 if (current) app.restoreResults = Object.assign({}, app.restoreResults, {[current.url]: {status: "failed", error: backend.error}})
             }
             if (method === "restore_phrase" && !backend.state.exists) app.restoreStep = "mints"
+            // A checksum failure names no single word, so it hands the user
+            // the whole phrase to look at rather than a banner.
+            if (method === "validate_phrase") { backend.error = ""; app.seedReviewing = true; app.seedNotice = {title: "That's not a valid seed phrase.", message: "One of the words is probably mistyped. Tap any word below to fix it.", severity: "error"} }
         }
         onRestored: result => {
             app.restoreResults = Object.assign({}, app.restoreResults, {[result.mint]: {status: "done", recovered: result.recovered}})
@@ -588,10 +711,26 @@ ShellRoot {
             if (code !== 0) return
             if (app.pasteTarget === "token") { if (text.startsWith("cashu")) app.receiveText = text; else if (text !== "" && pasteProbe.explicit) app.toast("That doesn't look like a Cashu token") }
             else if (app.pasteTarget === "invoice") { if (text !== "") app.paymentText = text.replace(/^lightning:/i, "") }
-            else if (app.pasteTarget === "mint") { if (text !== "") app.mintUrl = text.split(/\s+/)[0] }
+            else if (app.pasteTarget === "mint") {
+                // Empty and "held something, but not a mint URL" are different
+                // mistakes with different fixes, so they read differently.
+                if (text === "") app.mintNotice = "Clipboard is empty."
+                else {
+                    var found = ""
+                    text.split(/[\s,;]+/).forEach(piece => { if (!found) found = app.normalizeMintUrl(piece.replace(/^["']|["']$/g, "")) })
+                    if (found) { app.mintUrl = found; app.mintNotice = "" }
+                    else app.mintNotice = "No mint URL in your clipboard. Copy the mint's address, then paste."
+                }
+            }
             else if (app.pasteTarget === "first_mint") { if (text !== "") app.firstMintInput = text.split(/\s+/)[0] }
             else if (app.pasteTarget === "lock") { if (text !== "") app.lockTo = text.split(/\s+/)[0] }
-            else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
+            else if (app.pasteTarget === "words") {
+                var outcome = app.seedFill(text)
+                if (outcome === "filled") { app.seedNotice = null; app.seedRunChecksum() }
+                else if (outcome === "partial") app.seedNotice = {message: "Pasted " + app.restoreWordCount + (app.restoreWordCount === 1 ? " word" : " words") + ". Enter the rest.", severity: "caution"}
+                else if (outcome === "invalid") app.seedNotice = {message: "Pasted 12 words, but word " + (app.seedIndex + 1) + " isn't in the list.", severity: "caution"}
+                else app.seedNotice = {message: "Nothing in the clipboard looked like a seed phrase.", severity: "caution"}
+            }
             else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
             app.pasteTarget = ""
         }
@@ -809,12 +948,17 @@ ShellRoot {
         Ui.TextField { id: pasteInput; Layout.fillWidth: true; onTextEdited: pasteField.edited(text); onAccepted: pasteField.accepted() }
         SquareIcon { iconText: "󰅍"; Accessible.name: "Paste from clipboard"; Layout.preferredHeight: pasteInput.implicitHeight; onClicked: app.pasteInto(pasteField.target) }
     }
-    // The reference's NativeEmptyState: an icon over a title over a line
-    // of copy, centred, with an optional action. "full" is the screen-sized
-    // form (icon 56, title2), "section" the in-list one (icon 42, headline).
+    // The reference's NativeEmptyState: an illustration over a title over a
+    // line of copy, centred, with an optional action. "full" is the
+    // screen-sized form, "section" the in-list one. The illustration is
+    // shaded ASCII art in the mono font (ui/AsciiArt.js, generated by
+    // tools/ascii-art.py): a lit shape on a density ramp, the way classic
+    // ASCII art draws. Nerd Font glyphs at any size, glyphs in a bordered
+    // square, box-drawing line icons and small terrain-style sprites were
+    // all tried and none read as a picture; shading is what does.
     component EmptyState: ColumnLayout {
         id: emptyState
-        property string icon: ""
+        property string art: ""
         property string title: ""
         property string description: ""
         property string actionTitle: ""
@@ -826,9 +970,17 @@ ShellRoot {
         Accessible.role: Accessible.StaticText
         Accessible.name: title + ". " + description
         Item { Layout.fillHeight: true }
-        Label { text: emptyState.icon; font.pixelSize: Style.space(emptyState.section ? 42 : 56); opacity: 0.55; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
-        Label { text: emptyState.title; font.bold: true; font.pixelSize: emptyState.section ? Style.font.title : Style.font.heading; Layout.fillWidth: true; Layout.topMargin: Style.space(emptyState.section ? 10 : 12); horizontalAlignment: Text.AlignHCenter }
-        Label { visible: emptyState.description !== ""; text: emptyState.description; opacity: 0.6; font.pixelSize: emptyState.section ? Style.font.bodySmall : Style.font.body; Layout.fillWidth: true; Layout.topMargin: Style.space(4); horizontalAlignment: Text.AlignHCenter }
+        Label {
+            visible: emptyState.art !== ""
+            text: (Art.art[emptyState.art] || []).join("\n")
+            opacity: 0.85
+            font.pixelSize: emptyState.section ? Style.font.caption : Style.font.bodySmall
+            lineHeight: 1.0
+            Layout.alignment: Qt.AlignHCenter
+            Accessible.ignored: true
+        }
+        Label { text: emptyState.title; font.bold: true; font.pixelSize: emptyState.section ? Style.font.title : Style.font.heading; Layout.fillWidth: true; Layout.topMargin: emptyState.art !== "" ? Style.space(emptyState.section ? 12 : 16) : 0; horizontalAlignment: Text.AlignHCenter }
+        Label { visible: emptyState.description !== ""; text: emptyState.description; opacity: 0.55; font.pixelSize: emptyState.section ? Style.font.bodySmall : Style.font.body; Layout.fillWidth: true; Layout.topMargin: Style.space(4); horizontalAlignment: Text.AlignHCenter }
         Action { visible: emptyState.actionTitle !== ""; text: emptyState.actionTitle; Layout.topMargin: Style.space(emptyState.section ? 10 : 12); Layout.fillWidth: false; Layout.preferredWidth: Style.space(160); Layout.alignment: Qt.AlignHCenter; onClicked: emptyState.action() }
         Item { Layout.fillHeight: true }
     }
@@ -1054,8 +1206,11 @@ ShellRoot {
         visible: app.presented && !app.compact
         // Closing the window clears secrets exactly as hiding the panel does.
         onVisibleChanged: if (!visible && !app.compact) app.dismiss(true)
+        // A phone's proportions, as the reference is a phone app: the
+        // content column is 460 wide and the window opens about 2.2 times
+        // as tall as that, as tall as the screen allows under the bar.
         implicitWidth: Style.space(460)
-        implicitHeight: Style.space(620)
+        implicitHeight: Math.min(Style.space(1000), (window.screen ? window.screen.height : 1080) - Style.bar.sizeHorizontal - Style.gapsOut * 4)
         minimumSize: Qt.size(340, 420)
         color: Color.background
 
@@ -1164,9 +1319,16 @@ ShellRoot {
                     Secondary { text: "Cancel"; enabled: !backend.busy; onClicked: backend.request("cancel_payment", {review_id: backend.reviewId}) }
                 }
                 ColumnLayout {
+                    id: homeColumn
                     visible: app.walletVisible && !backend.review && app.page === "home"
                     Layout.fillWidth: true
                     spacing: Style.space(app.compact ? 14 : 22)
+                    // As many recent rows as fit between the RECENT label and
+                    // the View all link without scrolling: more in a window,
+                    // fewer in the panel, never fewer than one.
+                    readonly property real rowStride: Style.space(56) + spacing
+                    readonly property real freeHeight: contentScroll.availableHeight - homeColumn.y - recentLabel.y - recentLabel.height - spacing - viewAllLink.implicitHeight - spacing
+                    readonly property int fitRows: Math.max(1, Math.min(20, Math.floor(freeHeight / rowStride)))
                     Item { Layout.preferredHeight: Style.space(app.compact ? 12 : 26) }
                     Item {
                         Layout.fillWidth: true
@@ -1191,15 +1353,17 @@ ShellRoot {
                     // The reference drops the RECENT header when there is
                     // nothing to label and centres its empty state instead.
                     readonly property bool hasHistory: (backend.state.history || []).length > 0
-                    EmptyState { visible: app.mints.length === 0; icon: "󰁰"; title: "Add a mint to get started"; description: "Mints custody your ecash. Add one to begin."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
-                    EmptyState { visible: app.mints.length > 0 && !parent.hasHistory; icon: "󰋻"; title: "No Activity Yet"; description: "Your recent payments will show up here." }
+                    EmptyState { visible: app.mints.length === 0; art: "coin"; title: "Add a mint to get started"; description: "Mints custody your ecash. Add one to begin."; actionTitle: "Add mint"; onAction: app.connectMint(false) }
+                    EmptyState { visible: app.mints.length > 0 && !parent.hasHistory; art: "clock"; title: "No Activity Yet"; description: "Your recent payments will show up here." }
                     Divider { visible: parent.hasHistory }
-                    Label { visible: parent.hasHistory; text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
+                    Label { id: recentLabel; visible: parent.hasHistory; text: "RECENT"; opacity: 0.55; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
                     Repeater {
-                        model: (backend.state.history || []).slice(0, 3)
+                        model: (backend.state.history || []).slice(0, homeColumn.fitRows)
                         delegate: ActivityRow {}
                     }
-                    Secondary { visible: parent.hasHistory; text: "View all activity  ›"; onClicked: app.tab("history") }
+                    // The one borderless action on the page: a quiet link, not
+                    // a third button under Receive and Send.
+                    Button { id: viewAllLink; visible: parent.hasHistory; text: "View all activity  ›"; focusable: true; fontSize: Style.font.bodySmall; opacity: 0.7; Layout.alignment: Qt.AlignHCenter; onClicked: app.tab("history") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "history"
@@ -1213,18 +1377,17 @@ ShellRoot {
                     Ui.TextField { Layout.fillWidth: true; placeholderText: "Search activity"; text: app.historySearch; onTextEdited: app.historySearch = text }
                     RowLayout {
                         Layout.fillWidth: true
-                        Repeater { model: [{id:"all", name:"All"}, {id:"received", name:"Received"}, {id:"sent", name:"Sent"}]
+                        Repeater { model: [{id:"all", name:"All"}, {id:"pending", name:"Pending"}, {id:"completed", name:"Completed"}]
                             delegate: Tab { required property var modelData; text: modelData.name; selected: app.historyFilter === modelData.id; onClicked: app.historyFilter = modelData.id }
                         }
                     }
-                    EmptyState { visible: !app.activity.length && app.historySearch.trim() !== ""; icon: "󰍉"; title: "No Results"; description: "No activity matches “" + app.historySearch.trim() + "”." }
-                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter !== "all"; icon: "󰈲"; title: "Nothing Here"; description: "No transactions match this filter." }
-                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter === "all"; icon: "󰋚"; title: "No Activity Yet"; description: "Your first payment will show up here." }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() !== ""; art: "search"; title: "No Results"; description: "No activity matches “" + app.historySearch.trim() + "”." }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter !== "all"; art: "filter"; title: "Nothing Here"; description: "No transactions match this filter." }
+                    EmptyState { visible: !app.activity.length && app.historySearch.trim() === "" && app.historyFilter === "all"; art: "clock"; title: "No Activity Yet"; description: "Your first payment will show up here." }
                     Repeater {
                         model: app.activity
                         delegate: ActivityRow {}
                     }
-                    Label { text: "Showing up to 100 recent payments across your mints."; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
                     Label { visible: (backend.state.pending_invoices || []).length > 0; text: "Pending invoices"; font.bold: true }
                     Repeater {
                         model: backend.state.pending_invoices || []
@@ -1288,7 +1451,7 @@ ShellRoot {
                     Label { text: "Send"; font.pixelSize: Style.font.heading; font.bold: true }
                     // Without a mint there is nothing to send from; the reference
                     // shows this in place of the sheet's contents.
-                    EmptyState { visible: app.mints.length === 0; section: true; icon: "󰁰"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
+                    EmptyState { visible: app.mints.length === 0; section: true; art: "coin"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.connectMint(true) }
                     PasteField { visible: app.mints.length > 0; placeholderText: "Address, invoice, or Cashu Request"; target: "invoice"; text: app.paymentText; onEdited: text => app.paymentText = text; onAccepted: if (invoiceReview.enabled) invoiceReview.clicked() }
                     Action { id: invoiceReview; visible: app.mints.length > 0 && app.paymentText.trim() !== ""; text: backend.busy ? "Preparing…" : "Review invoice"; enabled: !backend.busy && !!backend.state.selected; Layout.fillWidth: true; onClicked: backend.request("pay_invoice", {text: app.paymentText}) }
                     Entry { visible: app.mints.length > 0; icon: "󰐲"; heading: "Scan"; detail: "Scan an invoice, address, or request"; onClicked: app.go("scan") }
@@ -1299,7 +1462,7 @@ ShellRoot {
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: "Receive"; font.pixelSize: Style.font.heading; font.bold: true }
-                    EmptyState { visible: app.mints.length === 0; section: true; icon: "󰁰"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.go("add_mint") }
+                    EmptyState { visible: app.mints.length === 0; section: true; art: "coin"; title: "No Mints Available"; description: "Add a mint to get started."; actionTitle: "Add mint"; onAction: app.connectMint(true) }
                     PasteField { visible: app.mints.length > 0; placeholderText: "Paste a Cashu token"; target: "token"; text: app.receiveText; onEdited: text => app.receiveText = text; onAccepted: if (receiveReview.enabled) receiveReview.clicked() }
                     Action { id: receiveReview; visible: app.mints.length > 0 && app.receiveText.trim() !== ""; text: backend.busy ? "Preparing…" : "Receive"; enabled: backend.unlocked && !backend.busy; onClicked: backend.request("receive_token", {text: app.receiveText}) }
                     Entry { visible: app.mints.length > 0; icon: "󰐲"; heading: "Scan"; detail: "Scan an ecash token"; onClicked: app.go("scan") }
@@ -1496,7 +1659,7 @@ ShellRoot {
                             onClicked: app.openMint(modelData.url)
                         }
                     }
-                    Entry { icon: "󰐕"; heading: "Add mint"; onClicked: app.go("add_mint") }
+                    Entry { icon: "󰐕"; heading: "Add mint"; onClicked: app.addMintByUrl() }
                     Footer { text: "Each mint holds a separate balance; the wallet shows their total. The default mint is used for new payments, and you can switch it when entering an amount." }
                 }
                 // The mint page, after the reference's MintDetailView: what the
@@ -1570,22 +1733,62 @@ ShellRoot {
                     Action { visible: !!mintPage.added && !mintPage.isDefault; text: "Set as Default"; enabled: !backend.busy; onClicked: backend.request("select_mint", {url: app.mintView}) }
                     Entry { visible: !!mintPage.added; icon: "󰆴"; heading: "Remove mint"; trailing: ""; destructive: true; enabled: !backend.busy; onClicked: removeMintDialog.opened = true }
                 }
+                // ---- Add mint, after cashubtc/wallet's AddMintSheet: the URL
+                // form alone, as the Mints tab opens it. Known mints live on
+                // the connect page below, which the wallet home and a payment
+                // without a mint open instead.
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "add_mint"
                     Layout.fillWidth: true
                     spacing: Style.space(16)
-                    Label { text: "Add a mint"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Caption { text: "SUGGESTED" }
-                    // Tapping a suggestion adds it outright; the field below is for
-                    // any other mint, with or without its https://.
-                    Repeater {
-                        model: app.suggestions
-                        delegate: Entry { required property var modelData; avatar: modelData.icon_url || ""; monogram: modelData.name; heading: modelData.name; detail: modelData.url.replace(/^https?:\/\//, ""); trailing: app.mints.some(mint => mint.url === modelData.url) ? "Added  ›" : "›"; enabled: backend.unlocked && !backend.busy; onClicked: app.openMint(modelData.url) }
+                    Label { text: app.trail.indexOf("connect_mint") >= 0 ? "Add by URL" : "Add mint"; font.bold: true; font.pixelSize: Style.font.heading }
+                    // A persistent label, not a placeholder doing double duty.
+                    Label { text: "Mint URL"; opacity: 0.6; font.pixelSize: Style.font.caption }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.space(8)
+                        Ui.TextField { id: mintUrlField; Layout.fillWidth: true; placeholderText: "https://…"; text: app.mintUrl; onTextEdited: { app.mintUrl = text; app.mintNotice = "" } onAccepted: if (addMintButton.enabled) addMintButton.clicked() }
+                        SquareIcon { visible: app.mintUrl !== ""; iconText: "󰅖"; Accessible.name: "Clear"; Layout.preferredHeight: mintUrlField.implicitHeight; enabled: !backend.busy; onClicked: { app.mintUrl = ""; app.mintNotice = "" } }
                     }
-                    Caption { text: "OTHER MINT" }
-                    PasteField { placeholderText: "mint.example.com"; target: "mint"; text: app.mintUrl; onEdited: text => app.mintUrl = text; onAccepted: if (addMintButton.enabled) addMintButton.clicked() }
-                    Footer { text: "Adding a mint means trusting its operator to redeem your ecash." }
-                    Action { id: addMintButton; text: backend.busy ? "Checking mint…" : "Trust and add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; Layout.fillWidth: true; onClicked: backend.request("add_mint", {url: app.mintUrl}) }
+                    Footer { text: "Mints are run by third parties; this wallet isn't affiliated with any of them. Only add a mint you trust." }
+                    Label { visible: app.mintNotice !== ""; text: app.mintNotice; opacity: 0.75; Layout.fillWidth: true }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.space(12)
+                        Secondary { text: "Paste"; enabled: !backend.busy; onClicked: app.pasteInto("mint") }
+                        Action { id: addMintButton; text: backend.busy && backend.pendingMethod === "add_mint" ? "Adding mint…" : "Add mint"; enabled: backend.unlocked && !backend.busy && app.mintUrl.trim() !== ""; onClicked: backend.request("add_mint", {url: app.mintUrl.trim()}) }
+                    }
+                }
+                // ---- Connect a mint, after the reference's ConnectMintSheet:
+                // recognition over recall. The known mints the wallet doesn't
+                // have yet add on tap; Add by URL opens the form above.
+                ColumnLayout {
+                    id: connectPage
+                    readonly property var known: app.suggestions.filter(mint => !app.mints.some(added => added.url === mint.url))
+                    visible: app.walletVisible && !backend.review && app.page === "connect_mint"
+                    Layout.fillWidth: true
+                    spacing: Style.space(16)
+                    Label { text: app.connectFromPayment ? "Add a mint first" : "Add mint"; font.bold: true; font.pixelSize: Style.font.heading }
+                    Label { text: "Mints issue the ecash you send and receive. Add one to get started."; opacity: 0.65; Layout.fillWidth: true }
+                    // Not "Suggested": the form says this wallet isn't affiliated
+                    // with any mint, and suggesting implies it is.
+                    Caption { visible: connectPage.known.length > 0; text: "KNOWN MINTS" }
+                    Repeater {
+                        model: connectPage.known
+                        delegate: Entry {
+                            required property var modelData
+                            avatar: modelData.icon_url || ""
+                            monogram: modelData.name
+                            heading: modelData.name
+                            detail: modelData.url.replace(/^https?:\/\//, "")
+                            trailing: "󰐕"
+                            Accessible.name: "Add " + modelData.name
+                            enabled: backend.unlocked && !backend.busy
+                            onClicked: backend.request("add_mint", {url: modelData.url})
+                        }
+                    }
+                    Label { visible: backend.busy && backend.pendingMethod === "add_mint"; text: "Adding mint…"; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    Button { text: "󰐕  Add by URL"; focusable: true; opacity: enabled ? 0.8 : 0.35; enabled: !backend.busy; Layout.alignment: Qt.AlignHCenter; onClicked: app.addMintByUrl() }
                 }
                 // ---- Settings, after cashubtc/wallet's Settings screen, minus
                 // Nostr. Pages, not sheets; confirmations use Omarchy's own
@@ -1978,8 +2181,8 @@ ShellRoot {
                     Label { text: app.qrTitle; font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Image { source: backend.qrView.qr || ""; visible: source.toString() !== ""; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: Math.min(app.compact ? 220 : 280, contentScroll.availableWidth); Layout.preferredHeight: Layout.preferredWidth; fillMode: Image.PreserveAspectFit }
                     Label { text: backend.qrView.qr_text || ""; font.pixelSize: Style.font.caption; opacity: 0.8; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; horizontalAlignment: Text.AlignHCenter }
+                    // Copy alone; the back arrow is the way out, as on every explainer.
                     Action { text: "Copy"; enabled: !clipboard.running; onClicked: app.copyText(backend.qrView.qr_text || "", app.qrTitle.toLowerCase()) }
-                    Secondary { text: "Done"; onClicked: app.back() }
                 }
                 // ---- Privacy
                 ColumnLayout {
@@ -2007,9 +2210,13 @@ ShellRoot {
             // most this far down, like the wallet's own pinned pages,
             // rather than sinking to the bottom of a void.
             anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: Math.min(parent.height, Style.space(640))
+            anchors.horizontalCenter: parent.horizontalCenter
+            // The same phone-width column as the wallet pages, so a
+            // maximised window keeps the frame narrow rather than stretching
+            // the chassis across the screen. Height caps at 1000 to match
+            // the window's own proportions.
+            width: Math.min(parent.width, Style.space(460))
+            height: Math.min(parent.height, Style.space(1000))
             visible: app.preWallet
             readonly property real gutter: Style.space(app.compact ? 18 : 26)
             readonly property string step: {
@@ -2028,11 +2235,13 @@ ShellRoot {
             // 0.9 s. Afterwards it fades with the step swap.
             property bool fieldEntered: false
             property int fieldFade: 900
+            // Read from `step` itself: a derived property can still hold its
+            // old value while this handler runs.
             onStepChanged: {
-                if (showsField && !fieldEntered) entrance.start()
+                if ((step === "welcome" || step === "restore_seed") && !fieldEntered) entrance.start()
                 stageScroll.contentItem.contentY = 0
             }
-            Component.onCompleted: if (showsField) entrance.start()
+            Component.onCompleted: if (step === "welcome" || step === "restore_seed") entrance.start()
             Timer { id: entrance; interval: motion.reduced ? 0 : 450; onTriggered: { onboarding.fieldEntered = true; settle.start() } }
             Timer { id: settle; interval: 950; onTriggered: onboarding.fieldFade = 280 }
             // The field's geometry: clear behind the tallest header of the
@@ -2254,27 +2463,170 @@ ShellRoot {
                     Stage {
                         id: restoreSeedStage
                         current: onboarding.step === "restore_seed"
-                        StepHeader { risen: restoreSeedStage.current; shown: restoreSeedStage.visible; title: "Restore wallet."; subhead: "Enter your 12 words in order." }
-                        Controls.TextArea {
-                            id: restoreWords
+                        // Word-by-word entry is keyboard-driven, so the field
+                        // takes focus on arrival, the one step that does.
+                        onCurrentChanged: if (current) Qt.callLater(() => seedField.forceActiveFocus())
+                        StepHeader { risen: restoreSeedStage.current; shown: restoreSeedStage.visible; title: "Restore wallet."; subhead: "Enter your 12 words, one at a time." }
+                        // The reference's word-by-word entry: a rail of twelve
+                        // ticks that scrubs, one card holding the current word
+                        // over up to two empty ghost cards, and a chip row that
+                        // is the paste link while nothing is entered, then up
+                        // to three completions while typing. Cards are opaque:
+                        // the vault door runs behind this step.
+                        RowLayout {
+                            visible: !app.seedReviewing
+                            Layout.fillWidth: true
+                            Layout.topMargin: Style.space(24)
+                            spacing: Style.space(16)
+                            Item {
+                                id: seedRail
+                                readonly property int slot: 10
+                                Layout.preferredWidth: Style.space(24)
+                                Layout.preferredHeight: slot * 12
+                                Layout.alignment: Qt.AlignTop
+                                Accessible.role: Accessible.Slider
+                                Accessible.name: "Seed word progress, word " + (app.seedIndex + 1) + " of 12"
+                                Repeater {
+                                    model: 12
+                                    delegate: Rectangle {
+                                        required property int index
+                                        readonly property bool current: index === app.seedIndex
+                                        readonly property bool settled: !current && app.seedWords[index] !== ""
+                                        x: (seedRail.width - width) / 2
+                                        y: index * seedRail.slot + (seedRail.slot - height) / 2
+                                        width: 2
+                                        height: current ? seedRail.slot : 3
+                                        radius: 1
+                                        color: app.seedComplete ? app.received : Color.foreground
+                                        opacity: current ? 1 : settled ? 0.6 : 0.25
+                                        Behavior on height { enabled: !motion.reduced; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                                        Behavior on y { enabled: !motion.reduced; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                                    }
+                                }
+                                // The rail scrubs: press and drag runs through the
+                                // words live; a tap jumps.
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -Style.space(10)
+                                    function slotAt(y) { return Math.max(0, Math.min(11, Math.floor((y - Style.space(10)) / seedRail.slot))) }
+                                    onPressed: mouse => app.seedJump(slotAt(mouse.y))
+                                    onPositionChanged: mouse => { if (pressed) app.seedJump(slotAt(mouse.y)) }
+                                    onReleased: seedField.forceActiveFocus()
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Style.space(10)
+                                Item {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: Style.space(14)
+                                    implicitHeight: seedEntryCard.implicitHeight
+                                    Repeater {
+                                        model: Math.min(2, 11 - app.seedIndex)
+                                        delegate: Rectangle {
+                                            required property int index
+                                            width: parent.width
+                                            height: seedEntryCard.implicitHeight
+                                            y: -Style.space(7) * (index + 1)
+                                            z: -1 - index
+                                            scale: 1 - 0.04 * (index + 1)
+                                            transformOrigin: Item.Top
+                                            radius: Style.cornerRadius
+                                            color: surface.color
+                                            border.width: 1
+                                            border.color: Qt.alpha(Color.foreground, index === 0 ? 0.22 : 0.12)
+                                        }
+                                    }
+                                    Rectangle {
+                                        id: seedEntryCard
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        implicitHeight: seedRow.implicitHeight + Style.space(24)
+                                        radius: Style.cornerRadius
+                                        color: Qt.tint(surface.color, Qt.alpha(Color.foreground, 0.07))
+                                        border.width: 1
+                                        border.color: app.seedRejected ? Color.urgent : Qt.alpha(Color.foreground, 0.25)
+                                        RowLayout {
+                                            id: seedRow
+                                            anchors.fill: parent
+                                            anchors.margins: Style.space(12)
+                                            spacing: Style.space(12)
+                                            Label { text: app.seedIndex + 1; opacity: 0.45; font.pixelSize: Style.font.title; Layout.preferredWidth: Style.space(24); horizontalAlignment: Text.AlignRight }
+                                            Ui.TextField {
+                                                id: seedField
+                                                Layout.fillWidth: true
+                                                placeholderText: "word " + (app.seedIndex + 1)
+                                                font.pixelSize: Style.font.heading
+                                                horizontalPadding: 0
+                                                verticalPadding: Style.space(4)
+                                                background: Item {}
+                                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                                Accessible.name: "Word " + (app.seedIndex + 1) + " of 12"
+                                                onTextEdited: app.seedHandle(app.seedTyped(text))
+                                                onAccepted: app.seedHandle(app.seedCommit())
+                                                // Backspace on an empty field steps back a word.
+                                                Keys.onPressed: event => { if (event.key === Qt.Key_Backspace && text === "" && app.seedStepBack()) event.accepted = true }
+                                                Connections {
+                                                    target: app
+                                                    function onSeedIndexChanged() { seedField.text = app.seedDraft }
+                                                    function onSeedWordsChanged() { if (seedField.text !== app.seedDraft) seedField.text = app.seedDraft }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Style.space(34)
+                                    spacing: Style.space(8)
+                                    Button { visible: app.restoreWordCount === 0 && app.seedDraft === ""; text: "󰅍  Paste seed phrase"; bordered: true; focusable: true; background: surface.color; onClicked: app.pasteInto("words") }
+                                    Repeater {
+                                        model: app.seedDraft !== "" ? app.seedCompletions : []
+                                        delegate: Button { required property string modelData; text: modelData; bordered: true; background: surface.color; onClicked: { app.seedSet(app.seedIndex, modelData); app.seedHandle(app.seedCommit()); seedField.forceActiveFocus() } }
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                Label {
+                                    readonly property string message: app.seedNotice ? app.seedNotice.message : app.seedRejected ? "Not a seed word. Check the spelling." : (app.seedComplete && app.seedVerified ? "All 12 words verified." : "")
+                                    visible: message !== ""
+                                    text: message
+                                    color: app.seedNotice && app.seedNotice.severity === "error" || app.seedRejected ? app.destructive : app.seedNotice ? app.warning : (app.seedComplete && app.seedVerified ? app.received : Color.foreground)
+                                    opacity: 1
+                                    font.pixelSize: Style.font.caption
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                        // A checksum failure names no single word, so the card
+                        // gives way to all twelve, each tappable back into the field.
+                        ColumnLayout {
+                            visible: app.seedReviewing
                             Layout.fillWidth: true
                             Layout.topMargin: Style.space(8)
-                            placeholderText: "Recovery words, separated by spaces"
-                            wrapMode: TextEdit.Wrap
-                            color: Color.foreground
-                            placeholderTextColor: Qt.alpha(Color.foreground, 0.5)
-                            font.family: Style.font.family
-                            text: app.restoreWordsText
-                            onTextChanged: if (text !== app.restoreWordsText) app.restoreWordsText = text
-                            // Opaque: the vault door runs behind this step, and
-                            // typed words must not sit on its glyphs.
-                            background: Rectangle { color: surface.color; radius: Style.cornerRadius; border.color: Qt.alpha(Color.foreground, 0.25) }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
                             spacing: Style.space(12)
-                            Label { text: app.restoreWordCount + " of 12 words"; opacity: 0.55; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
-                            Button { text: "󰅍  Paste"; focusable: true; opacity: 0.8; onClicked: app.pasteInto("words") }
+                            Label { text: app.seedNotice ? (app.seedNotice.title || "") : ""; visible: text !== ""; color: app.destructive; font.bold: true; Layout.fillWidth: true }
+                            Label { text: app.seedNotice ? app.seedNotice.message : ""; visible: text !== ""; opacity: 0.75; Layout.fillWidth: true }
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 3
+                                rowSpacing: Style.space(8)
+                                columnSpacing: Style.space(8)
+                                Repeater {
+                                    model: 12
+                                    delegate: Button {
+                                        required property int index
+                                        text: (index + 1 < 10 ? "0" : "") + (index + 1) + "  " + (app.seedWords[index] || "…")
+                                        bordered: true
+                                        focusable: true
+                                        leftAlign: true
+                                        background: surface.color
+                                        Layout.fillWidth: true
+                                        Accessible.name: "Word " + (index + 1) + ", " + app.seedWords[index]
+                                        onClicked: { app.seedJump(index); Qt.callLater(() => seedField.forceActiveFocus()) }
+                                    }
+                                }
+                            }
                         }
                     }
                     Stage {
@@ -2285,9 +2637,12 @@ ShellRoot {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: Style.space(12)
-                            Tab { text: "Add"; enabled: app.restoreMintInput.trim() !== ""; onClicked: app.stageRestoreMint(app.restoreMintInput) }
-                            Tab { text: "Paste"; onClicked: app.pasteInto("mints") }
+                            Tab { text: "󰐕  Add"; enabled: app.restoreMintInput.trim() !== ""; opacity: enabled ? 1 : 0.4; onClicked: app.stageRestoreMint(app.restoreMintInput) }
+                            Tab { text: "󰅍  Paste"; Accessible.name: "Paste mint URLs from clipboard"; onClicked: app.pasteInto("mints") }
                         }
+                        // The list is empty far more often than not, and the
+                        // disabled primary never says why.
+                        Label { visible: app.restoreMintList.length === 0; text: "Add the mints you used before, then restore."; opacity: 0.6; Layout.fillWidth: true; Layout.topMargin: Style.space(8); horizontalAlignment: Text.AlignHCenter }
                         Label { visible: app.restoreNotice !== ""; text: app.restoreNotice; opacity: 0.75; Layout.fillWidth: true }
                         Repeater {
                             model: onboarding.step === "restore_mints" ? app.restoreMintList : []
@@ -2305,7 +2660,7 @@ ShellRoot {
                     Stage {
                         id: restoreProgressStage
                         current: onboarding.step === "restore_progress"
-                        StepHeader { risen: restoreProgressStage.current; shown: restoreProgressStage.visible; title: restorePage.allSettled ? "Wallet restored." : "Restoring wallet."; subhead: !restorePage.allSettled ? "Recovering funds from your mints…" : restorePage.recoveredTotal > 0 ? "Here's what we recovered." : "No funds found on these mints." }
+                        StepHeader { risen: restoreProgressStage.current; shown: restoreProgressStage.visible; title: "Restoring wallet."; subhead: !restorePage.allSettled ? "Checking your mints…" : restorePage.recoveredTotal > 0 ? "Here's what we restored." : "No funds on these mints. If you used others, restore again from Settings with those." }
                         Label { visible: restorePage.recoveredTotal > 0; text: "󰄬  Recovered: " + app.amountLabel(restorePage.recoveredTotal); color: app.received; Layout.fillWidth: true }
                         Repeater {
                             model: onboarding.step === "restore_progress" ? app.restoreMintList : []
@@ -2366,7 +2721,7 @@ ShellRoot {
                     case "mint": return app.firstMintSelection.length > 0 || app.firstMintInput.trim() !== ""
                     case "concept": return true
                     case "unlock": return backend.ready && desktopLock.safeToUnlock && (!onboarding.passwordRequired || password.text.length > 0)
-                    case "restore_seed": return backend.ready && app.restoreWordCount === 12
+                    case "restore_seed": return backend.ready && app.seedComplete
                     case "restore_mints": return restorePage.mintCount > 0
                     case "restore_progress": return restorePage.allSettled
                     default: return false
@@ -2379,7 +2734,7 @@ ShellRoot {
                     case "mint": app.continueFirstMint(); break
                     case "concept": app.conceptOpen = false; break
                     case "unlock": backend.request("unlock", {password: password.text}); break
-                    case "restore_seed": backend.request("validate_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " ")}); break
+                    case "restore_seed": app.seedContinue(); break
                     case "restore_mints": app.beginRestore(); break
                     case "restore_progress": app.finishRestore(); break
                     }
@@ -2397,8 +2752,8 @@ ShellRoot {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.space(12)
-                        Label { text: "󰀦"; color: Color.urgent; font.pixelSize: Style.font.heading; Layout.preferredWidth: Style.space(24); horizontalAlignment: Text.AlignHCenter }
-                        Label { text: "Never share these words with anyone."; color: Color.urgent; Layout.fillWidth: true }
+                        Label { text: "󰀦"; color: app.warning; font.pixelSize: Style.font.heading; Layout.preferredWidth: Style.space(24); horizontalAlignment: Text.AlignHCenter }
+                        Label { text: "Never share these words with anyone."; color: app.warning; Layout.fillWidth: true }
                     }
                     Button {
                         id: seedAcknowledge

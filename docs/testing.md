@@ -65,7 +65,7 @@ On the development machine, Rust 1.98.0 produced a stripped release worker of 16
 
 The Rust security tests cover enabling/removing optional password protection, wrong-password rejection, device-key permissions, and recovery-phrase preservation. The worker integration test additionally covers locked ecash (a token locked to Bob's seed key refused by Alice before any mint call and redeemed by Bob, a device key generated, named, received to, backed up as an nsec, imported and removed), the Privacy toggles, the password check on revealing the phrase with App Lock on, Delete Wallet, and the in-app restore with a per-mint result.
 
-The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering and detail navigation, and exercises the App Lock and Backup & Restore pages. Optional `CASHU_ME_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet.
+The native flow test also activates the new mint and amount forms, validates confirmed Lightning receipt on the result page, checks history filtering (the reference's All / Pending / Completed) and detail navigation, and exercises the App Lock and Backup & Restore pages. Optional `CASHU_ME_TEST_CAPTURE` exports temporary screenshots of the main UX surfaces from the isolated fake wallet, including the filtered-empty History; each capture expands to window mode first and waits for a fresh file, because the compact panel is a layer-shell surface that is never visible offscreen.
 
 
 For panel rendering on a running Hyprland desktop, run:

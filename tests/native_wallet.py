@@ -119,19 +119,36 @@ ShellRoot {
                                 if predicate(state): return state
                             time.sleep(0.1)
                         self.fail("UI state did not converge: " + (base / "qml.log").read_text())
+                    def snap(name, settle=0.2):
+                        # grabToImage saves asynchronously and fails silently
+                        # when the surface has no window, so wait for a fresh
+                        # file rather than copying whatever was there before.
+                        # Only the floating window is visible offscreen; the
+                        # compact panel is a layer-shell surface with no
+                        # compositor here, so `show` leaves nothing to grab.
+                        self.assertEqual(ipc(ui, "wallet", "expand").returncode, 0)
+                        deadline = time.monotonic() + 5
+                        while time.monotonic() < deadline:
+                            status = ipc(ui, "wallet", "status")
+                            if status.returncode == 0 and json.loads(status.stdout)["presentation"] == "window": break
+                            time.sleep(0.1)
+                        capture = Path(environment["CASHU_ME_TEST_CAPTURE"])
+                        before = capture.stat().st_mtime_ns if capture.is_file() else None
+                        time.sleep(settle); call("capture")
+                        deadline = time.monotonic() + 5
+                        while time.monotonic() < deadline:
+                            if capture.is_file() and capture.stat().st_mtime_ns != before: break
+                            time.sleep(0.1)
+                        else:
+                            self.fail("no fresh capture for " + name + ": " + (base / "qml.log").read_text())
+                        time.sleep(0.1)
+                        shutil.copy(capture, capture.with_name(capture.stem + "-" + name + ".png"))
                     wait(lambda s: s["ready"] and s["safe"])
-                    if environment.get("CASHU_ME_TEST_CAPTURE"):
-                        # The welcome field fades in 0.45 s after the title settles.
-                        time.sleep(1.6)
-                        call("capture")
-                        time.sleep(0.3)
-                        self.assertTrue(Path(environment["CASHU_ME_TEST_CAPTURE"]).is_file(), (base / "qml.log").read_text())
-                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-welcome.png"))
+                    # The welcome field fades in 0.45 s after the title settles.
+                    if environment.get("CASHU_ME_TEST_CAPTURE"): snap("onboarding-welcome", settle=1.6)
                     # Restore from Welcome is one step in and one step back.
                     call("restore"); wait(lambda s: s["step"] == "restore_seed")
-                    if environment.get("CASHU_ME_TEST_CAPTURE"):
-                        time.sleep(0.6); call("capture"); time.sleep(0.3)
-                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-restore.png"))
+                    if environment.get("CASHU_ME_TEST_CAPTURE"): snap("onboarding-restore", settle=0.6)
                     call("back"); wait(lambda s: s["step"] == "welcome")
                     # Onboarding, after cashubtc/wallet: create, then the seed
                     # phrase behind a tap-to-reveal card and an acknowledgement,
@@ -139,13 +156,9 @@ ShellRoot {
                     call("create"); wait(lambda s: s["unlocked"] and not s["busy"] and s["step"] == "seed")
                     self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["walletVisible"])
                     call("reveal"); wait(lambda s: s["hasPhrase"] and not s["busy"])
-                    if environment.get("CASHU_ME_TEST_CAPTURE"):
-                        time.sleep(0.4); call("capture"); time.sleep(0.3)
-                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-seed.png"))
+                    if environment.get("CASHU_ME_TEST_CAPTURE"): snap("onboarding-seed", settle=0.4)
                     call("acknowledge"); wait(lambda s: s["step"] == "mint" and not s["hasPhrase"])
-                    if environment.get("CASHU_ME_TEST_CAPTURE"):
-                        time.sleep(0.4); call("capture"); time.sleep(0.3)
-                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-mint.png"))
+                    if environment.get("CASHU_ME_TEST_CAPTURE"): snap("onboarding-mint", settle=0.4)
                     call("firstMint", "http://127.0.0.1:33381")
                     wait(lambda s: s["mints"] == 1 and s["walletVisible"] and not s["handoff"] and s["page"] == "home" and not s["busy"])
                     self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["passwordRequired"])
@@ -165,25 +178,22 @@ ShellRoot {
                     wait(lambda s: s["page"] == "complete" and s["completionAmount"] == "64")
                     call("navigate", "history")
                     wait(lambda s: s["page"] == "history" and s["activityCount"] == 1)
-                    # Assert both directions: a filter that always returned an
-                    # empty list passed when only the "sent" case was checked.
-                    call("filter", "sent")
+                    # Assert both ways: a filter that always returned an empty
+                    # list passed when only the excluding case was checked.
+                    call("filter", "pending")
                     wait(lambda s: s["activityCount"] == 0)
-                    call("filter", "received")
+                    if environment.get("CASHU_ME_TEST_CAPTURE"): snap("history_empty")
+                    call("filter", "completed")
                     wait(lambda s: s["activityCount"] == 1)
                     call("filter", "all")
                     wait(lambda s: s["activityCount"] == 1)
                     call("detail"); wait(lambda s: s["page"] == "transaction")
                     call("back"); wait(lambda s: s["page"] == "history")
                     if environment.get("CASHU_ME_TEST_CAPTURE"):
-                        capture = Path(environment["CASHU_ME_TEST_CAPTURE"])
                         for page in ("home", "history", "mints", "send", "send_amount", "receive", "settings", "app_lock"):
                             self.assertEqual(ipc(ui, "test", "navigate", page).returncode, 0)
                             wait(lambda s: s["page"] == page)
-                            time.sleep(0.2)
-                            call("capture")
-                            time.sleep(0.2)
-                            shutil.copy(capture, capture.with_name(capture.stem + "-" + page + ".png"))
+                            snap(page)
                     call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
                     # Presentation changes keep the same prepared payment and form tree.
                     self.assertEqual(ipc(ui, "wallet", "expand").returncode, 0)

@@ -137,6 +137,10 @@ Single-threaded event loop manages all UI state and coordinates with the Rust ba
 
 **ui/AsciiField.js, ui/AsciiField.qml** — The onboarding terrain: a grid of Omarchy's mono glyphs driven by layered sine noise, ported from the reference's `AsciiField.swift` and pinned to its golden vectors by `tests/ascii_field.py`. The JS holds the pure math (terrain, vault door, pointer lens, erosion, layout mask); the QML is a Canvas renderer that shapes the seven glyphs once into a sprite sheet and blits them at 30 fps on wall-clock time, pausing whenever the field is off screen. The same component draws the handoff curtain. `CASHU_ME_ASCII_STATIC_TIME` freezes it for captures.
 
+**ui/AsciiArt.js, tools/ascii-art.py** — The empty-state illustrations: shaded ASCII art in the mono font, a lit shape sampled onto a 26 × 13 cell grid and mapped onto a density ramp, the way classic ASCII art draws (coin with an embossed ₿, clock, magnifier, funnel). The JS is generated; edit the shapes in the tool and rerun `python3 tools/ascii-art.py`. Nerd Font glyphs, glyphs in a bordered square, box-drawing line icons and small terrain-style sprites were all tried for this and none read as a picture at that size.
+
+**ui/Bip39.js** — The BIP-39 English wordlist (the bip39 crate's copy) for the restore step's per-word check and completions; the checksum still runs in the worker.
+
 **ui/ClockFormat.js** — Formats dates per Omarchy's `shell.json` setting (excludes year)
 
 **ui/MotionPreferences.qml, Motion.js** — Reduced motion comes only from `CASHU_ME_REDUCED_MOTION=1`; there is no in-app setting, matching the reference wallet
