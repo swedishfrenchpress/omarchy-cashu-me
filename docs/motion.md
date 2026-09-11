@@ -8,18 +8,34 @@ Reference: [Emil Kowalski’s design and animation skills](https://github.com/em
 | --- | --- | --- |
 | Panel maps/unmaps abruptly | 200 ms entrance, 125 ms exit, opacity + scale 0.97 → 1, origin from the clicked bar icon | Spatial continuity for occasional pointer use |
 | Button color feedback only | Passive press observation, scale 0.98, 100 ms press / 160 ms release | Immediate tactile feedback; existing Omarchy click, focus and color behavior remains authoritative |
-| Onboarding mark takes 1100 ms with all rings together | 250 ms per ring, 50 ms stagger, short transform offset | First-use delight with no interaction delay |
+| Onboarding mark: three rings, 250 ms each, 50 ms stagger | The reference wallet's ASCII terrain and onboarding chassis (see below) | The reference's onboarding, in Omarchy's own glyphs |
 | Success checkmark appears abruptly | 250 ms opacity + scale 0.95 → 1, once per completion | Acknowledges confirmed success without animating the amount |
 | Amounts snap to new values | `AnimatedAmount`: each digit is a clipped 0…9,0 wheel that rolls the short way in the direction the number moved over 600 ms, a new place fades in and rolls up from zero, surviving columns slide over; prefix and suffix marks stay put | Typing on the amount page and a balance change after a refresh read as one continuous number rather than a flash |
 | No motion preference | `CASHU_ME_REDUCED_MOTION=1`; no in-app setting, as the reference wallet defers to the system | Removes translation/scale; keeps a gentle 125 ms fade; digit wheels snap |
 | Expand tooltip binds to a signal | Uses native Omarchy tooltipText | Correct hover behavior and consistent styling |
+
+## Onboarding
+
+Onboarding is exempt from the restraint above, as it is in cashubtc/wallet, and nothing here is reused inside the wallet proper. The timings are the reference's:
+
+| Element | Out | In |
+| --- | --- | --- |
+| Stage swap | opacity 1 → 0, 180 ms | scale 0.96 → 1, opacity 0 → 1, 280 ms, starting 100 ms after the exit begins |
+| Step title and subhead | fade with the stage | y +10 → 0, 260 ms |
+| Chassis container | never animates | never animates; labels change in place |
+| ASCII field entrance (first launch) | — | 0.45 s after the title settles, opacity 0 → 1 over 0.9 s |
+| Terrain ↔ vault morph | — | per-cell brightness lerp over 280 ms with the step swap |
+| Pointer lens | release settle 0.6 s, no spring | press bloom 0.28 s with ~5% overshoot; 60 fps while pressed |
+| Handoff | curtain erodes over 1 s, linear driver, level by level | curtain sweeps down over 0.45 s, gate flips at full cover, centre bloom at +0.48 s |
+
+The field runs at 30 fps on wall-clock time (a pause never rewinds), pauses whenever the panel is hidden or the step does not show it, and costs about 10 ms a frame on the development machine, three of them terrain math. Reduced motion draws one still frame, snaps the morph, disables the lens, and skips the curtain: the gate flips at once. `CASHU_ME_ASCII_STATIC_TIME=2.5` freezes the field for captures. Blur is not used anywhere: the hidden seed phrase is masked and dimmed rather than blurred.
 
 ## Frequency and function gates
 
 - Bar opening is occasional pointer interaction: short, reversible motion. CLI `show`/`expand`, Escape, and keyboard navigation are immediate. Window expansion transfers the same live form tree; the compositor owns window placement and its animation.
 - Tabs, history rows, keyboard activation, balance updates, amounts, invoices, QR codes and recovery words do not gain decorative entrance animations. Stable financial data and quick navigation take priority.
 - No bouncing, list stagger, infinite loading shimmer, blur filters, layout-size animation, snapshots of wallet contents, or delayed payment actions.
-- Onboarding has a one-time stagger. The success mark animates only after confirmed backend completion, not when starting a request or creating an invoice.
+- Onboarding is the one exempt surface (above). The success mark animates only after confirmed backend completion, not when starting a request or creating an invoice.
 
 ## Implementation contract
 

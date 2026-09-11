@@ -59,10 +59,11 @@ CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon
 # Terminal 3: Run integration tests
 python3 tests/wallet_integration.py
 python3 tests/native_wallet.py
+python3 tests/ascii_field.py   # terrain parity with the reference, via qml6
 ```
 
-The native wallet test (~35 seconds) verifies:
-- Onboarding and wallet creation
+The native wallet test (~45 seconds) verifies:
+- Onboarding: create, the seed card and acknowledgement, the first mint added from the onboarding step, the handoff into the wallet, and one step into restore and back
 - Automatic reopening after desktop lock
 - Token send/receive and QR generation
 - BOLT11 Lightning payment review
@@ -132,10 +133,9 @@ Single-threaded event loop manages all UI state and coordinates with the Rust ba
 - Maps responses back to callers via ID matching
 - Matches each reply to the outstanding request id; restarts the worker into the locked state after an unexpected exit (bounded to 3 attempts)
 
-**ui/Welcome.qml** — Onboarding flow:
-- Create wallet, restore from phrase, or import backup
-- Password entry for protected wallets
-- Optional security password setup
+**Onboarding** (in `ui/shell.qml`, the `onboarding` frame) — after cashubtc/wallet's onboarding: a live stage over a pinned action chassis, one frame for every screen before the wallet (Welcome, What is ecash?, seed phrase, first mint, unlock, and the three restore steps, which Settings → Restore also uses). Create → seed card (tap to reveal, acknowledge checkbox gates the primary) → pick your first mint (suggested rows, Add by URL, Skip) → handoff into the wallet. `app.onboardingOpen` holds the wallet back from view between create and the handoff and is never persisted: an interrupted onboarding opens the wallet next time. No password at onboarding; App Lock is optional under Settings.
+
+**ui/AsciiField.js, ui/AsciiField.qml** — The onboarding terrain: a grid of Omarchy's mono glyphs driven by layered sine noise, ported from the reference's `AsciiField.swift` and pinned to its golden vectors by `tests/ascii_field.py`. The JS holds the pure math (terrain, vault door, pointer lens, erosion, layout mask); the QML is a Canvas renderer that shapes the seven glyphs once into a sprite sheet and blits them at 30 fps on wall-clock time, pausing whenever the field is off screen. The same component draws the handoff curtain. `CASHU_ME_ASCII_STATIC_TIME` freezes it for captures.
 
 **ui/ClockFormat.js** — Formats dates per Omarchy's `shell.json` setting (excludes year)
 

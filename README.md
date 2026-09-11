@@ -33,8 +33,8 @@ Settings → **Display** offers the [BIP-177](https://bips.dev/177/) bitcoin sym
 
 ## Using the wallet
 
-1. Start with the animated introduction and choose Create wallet. No password or account is required. You can also restore a backup or use recovery words and mint URLs.
-2. In Mints, explicitly add a suggested mint or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
+1. Start with the introduction and choose Create Wallet. Write down the seed phrase it shows, then pick your first mint from the suggestions, add your own URL, or skip. No password or account is required. Restore Wallet takes recovery words and mint URLs instead.
+2. In Mints, add further mints from the suggestions or enter your own URL. Suggestions are Minibits, Chorus OFF Mint, Antifiat, and Macadamia; see [the verified mint catalog](docs/mints.md). Adding a mint means trusting its operator to redeem its ecash.
 3. Receive by creating a BOLT11 Lightning invoice or redeeming a Cashu token. Paste tokens, scan a screen region, import a QR image, or use a webcam.
 4. Send by pasting a BOLT11 invoice or choosing Send ecash and entering an amount. Review the mint, amount, and maximum fee/debit before confirmation.
 5. Wallet shows your total balance across mints and recent payments. History provides filters, payment details, pending invoices, and unclaimed ecash. Mints lists each balance separately and marks the mint used for new payments. Dates follow the Omarchy clock format from `~/.config/omarchy/shell.json`, without the year. Reopen a token to share it again, or reclaim it if it remains unspent.

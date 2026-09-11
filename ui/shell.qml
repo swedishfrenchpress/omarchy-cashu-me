@@ -7,6 +7,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui as Ui
 import "ClockFormat.js" as ClockFormat
+import "Motion.js" as Motion
+import "AsciiField.js" as Field
 
 ShellRoot {
     id: app
@@ -141,9 +143,17 @@ ShellRoot {
     function back() {
         if (backend.review) { backend.request("cancel_payment", {review_id: backend.reviewId}); return }
         if (backend.busy) return
+        if (conceptOpen) { conceptOpen = false; return }
         // The restore's final step is forward-only, as in the reference.
         if ((page === "restore" || restoreMode) && restoreStep === "progress") return
+        // Back undoes the last step: mints → words → Welcome.
+        if ((page === "restore" || restoreMode) && restoreStep === "mints") { restoreStep = "seed"; return }
         if (!walletVisible && restoreMode) { restoreMode = false; return }
+        if (onboardingOpen) {
+            if (onboardingStep === "mint" && firstMintQueue.length === 0) onboardingStep = "seed"
+            else if (onboardingStep === "seed") onboardingStep = "welcome"
+            return
+        }
         if (page === "share" || page === "complete") {
             backend.share = {}; backend.completion = {}; trail = []; page = "home"; return
         }
@@ -202,6 +212,84 @@ ShellRoot {
     property string receiveMethod: "lightning"
     property var suggestions: []
     property bool restoreMode: false
+    // ---- Onboarding, after cashubtc/wallet: Welcome → seed phrase → first
+    // mint → wallet. `onboarding` holds the wallet back from view between
+    // create and the handoff; it is never persisted, so an interrupted
+    // onboarding simply opens the wallet next time (the phrase stays in
+    // Settings → Backup).
+    property bool onboardingOpen: false
+    property string onboardingStep: "welcome"
+    // Leaving the seed step hides the phrase at once.
+    onOnboardingStepChanged: if (onboardingStep !== "seed") backend.recoveryPhrase = ""
+    property bool conceptOpen: false
+    property bool seedAcknowledged: false
+    property var firstMintSelection: []
+    property var firstMintCustom: []
+    property string firstMintInput: ""
+    property bool firstMintInputOpen: false
+    property string firstMintNotice: ""
+    property var firstMintQueue: []
+    function resetOnboarding() {
+        onboardingOpen = false; onboardingStep = "welcome"; conceptOpen = false; seedAcknowledged = false
+        firstMintSelection = []; firstMintCustom = []; firstMintInput = ""; firstMintInputOpen = false; firstMintNotice = ""; firstMintQueue = []
+    }
+    function toggleSeedReveal() {
+        if (backend.recoveryPhrase !== "") backend.recoveryPhrase = ""
+        else backend.request("recovery_phrase", {password: ""})
+    }
+    function toggleFirstMint(url) {
+        var picked = app.firstMintSelection.indexOf(url) >= 0
+        app.firstMintSelection = picked ? app.firstMintSelection.filter(item => item !== url) : app.firstMintSelection.concat([url])
+    }
+    function normalizeMintUrl(piece) {
+        var url = piece.trim()
+        if (url === "") return ""
+        if (!/^https?:\/\//i.test(url)) url = "https://" + url
+        url = url.replace(/\/+$/, "")
+        if (!/^https?:\/\/[^\s\/]+\.[^\s\/]+/i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(url)) return ""
+        return url
+    }
+    // The custom URL becomes a selected row, as in the reference.
+    function commitFirstMint() {
+        if (app.firstMintInput.trim() === "") return true
+        var url = app.normalizeMintUrl(app.firstMintInput)
+        if (url === "") { app.firstMintNotice = "That doesn't look like a mint URL."; return false }
+        var known = app.suggestions.concat(app.firstMintCustom.map(item => ({url: item}))).some(mint => mint.url.toLowerCase() === url.toLowerCase())
+        if (known) { app.firstMintNotice = "That mint is already in the list."; return false }
+        app.firstMintNotice = ""
+        app.firstMintCustom = app.firstMintCustom.concat([url])
+        app.firstMintSelection = app.firstMintSelection.concat([url])
+        app.firstMintInput = ""
+        app.firstMintInputOpen = false
+        return true
+    }
+    // Adds the chosen mints one at a time, suggestions first in their own
+    // order, then the custom URLs in entry order; the handoff follows the last.
+    function continueFirstMint() {
+        if (!app.commitFirstMint()) return
+        var ordered = app.suggestions.map(mint => mint.url).concat(app.firstMintCustom).filter(url => app.firstMintSelection.indexOf(url) >= 0)
+        if (ordered.length === 0) return
+        app.firstMintNotice = ""
+        app.firstMintQueue = ordered
+        app.addNextFirstMint()
+    }
+    function addNextFirstMint() {
+        if (app.firstMintQueue.length === 0) { app.finishOnboarding(); return }
+        backend.request("add_mint", {url: app.firstMintQueue[0]})
+    }
+    // The closing beat: the terrain curtain sweeps over the last step, the
+    // wallet mounts under full cover, and the curtain erodes to reveal it.
+    // Reduced motion, or a hidden panel, flips the gate at once.
+    function finishOnboarding() {
+        if (motion.reduced || !app.presented) { app.completeGate(); return }
+        handoff.begin()
+    }
+    function completeGate() {
+        app.resetOnboarding()
+        app.restoreMode = false; app.trail = []; app.page = "home"
+        app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {}
+        backend.recoveryPhrase = ""
+    }
     // Settings state that lives in the interface. Everything the worker
     // persists is read from backend.state; these are the pieces mid-edit.
     property string appLockMode: ""
@@ -307,7 +395,10 @@ ShellRoot {
         app.restoreResults = Object.assign({}, app.restoreResults, {[url]: {status: "pending"}})
         app.restoreRunNext()
     }
-    function finishRestore() { app.restoreMode = false; app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {} }
+    function finishRestore() {
+        if (app.restoreMode) { app.finishOnboarding(); return }
+        app.trail = []; app.page = "home"; app.restoreStep = "seed"; app.restoreWordsText = ""; app.restoreMintList = []; app.restoreResults = {}
+    }
     function pasteInto(target) { pasteTarget = target; pasteProbe.explicit = true; pasteProbe.running = false; pasteProbe.running = true }
     property string pasteTarget: ""
     property bool automaticOpenAttempted: false
@@ -319,7 +410,10 @@ ShellRoot {
     // worker pauses its state pushes for the whole 300 s review window.
     property double now: Date.now()
     readonly property bool reviewExpired: !!backend.review && !!backend.review.expiry && backend.review.expiry * 1000 < app.now
-    readonly property bool walletVisible: backend.preview || backend.unlocked
+    readonly property bool walletVisible: backend.preview || (backend.unlocked && !app.onboardingOpen)
+    // Every screen before the wallet, plus the restore pages from Settings,
+    // shares the onboarding frame: a stage over a pinned action chassis.
+    readonly property bool preWallet: !app.walletVisible || (app.page === "restore" && !backend.review)
     readonly property var selectedMint: {
         var mints = backend.state.mints || []
         return mints.find(mint => mint.url === backend.state.selected) || {name: "No mint selected", spendable: "0", pending: "0", reserved: "0"}
@@ -351,12 +445,16 @@ ShellRoot {
         }
         onStateChanged: app.maybeOpen()
         onErrorChanged: if (backend.error) contentScroll.contentItem.contentY = 0
-        onNoticeChanged: if (backend.notice) { app.toast(backend.notice); backend.notice = "" }
+        onNoticeChanged: if (backend.notice) { if (!app.onboardingOpen) app.toast(backend.notice); backend.notice = "" }
         // Clearing a submitted secret waits for the worker to accept it: a
         // rejected recovery phrase used to be wiped, forcing the user to retype
         // every word from paper.
         onSucceeded: method => {
             if (method === "unlock" || method === "create") password.clear()
+            // The wallet exists from here on; the seed and first-mint steps
+            // hold it back from view until the handoff.
+            if (method === "create") { app.resetOnboarding(); app.onboardingOpen = true; app.onboardingStep = "seed" }
+            if (method === "add_mint" && app.onboardingOpen && app.firstMintQueue.length > 0) { app.firstMintQueue = app.firstMintQueue.slice(1); app.addNextFirstMint() }
             if (method === "validate_phrase") app.restoreStep = "mints"
             if (method === "restore_phrase") { app.trail = []; app.page = "restore"; app.restoreStep = "progress"; app.restoreRunNext() }
             if (method === "delete_wallet") {
@@ -375,6 +473,7 @@ ShellRoot {
             if (method === "locked_request") { if (app.page !== "qr") app.go("qr") }
         }
         onFailed: method => {
+            if (method === "add_mint") app.firstMintQueue = []
             if (method === "restore_mint") {
                 var current = app.restoreMintList.find(mint => (app.restoreResults[mint.url] || {}).status === "restoring")
                 if (current) app.restoreResults = Object.assign({}, app.restoreResults, {[current.url]: {status: "failed", error: backend.error}})
@@ -386,6 +485,8 @@ ShellRoot {
             app.restoreRunNext()
         }
         onLocked: {
+            handoff.finishImmediately()
+            app.resetOnboarding()
             app.page = "home"
             app.trail = []
             app.transaction = {}
@@ -488,6 +589,7 @@ ShellRoot {
             if (app.pasteTarget === "token") { if (text.startsWith("cashu")) app.receiveText = text; else if (text !== "" && pasteProbe.explicit) app.toast("That doesn't look like a Cashu token") }
             else if (app.pasteTarget === "invoice") { if (text !== "") app.paymentText = text.replace(/^lightning:/i, "") }
             else if (app.pasteTarget === "mint") { if (text !== "") app.mintUrl = text.split(/\s+/)[0] }
+            else if (app.pasteTarget === "first_mint") { if (text !== "") app.firstMintInput = text.split(/\s+/)[0] }
             else if (app.pasteTarget === "lock") { if (text !== "") app.lockTo = text.split(/\s+/)[0] }
             else if (app.pasteTarget === "words") { if (text.split(/\s+/).length === 12) app.restoreWordsText = text; else app.restoreNotice = "Nothing in the clipboard looked like a seed phrase." }
             else if (app.pasteTarget === "mints") { if (text === "") app.restoreNotice = "Clipboard is empty."; else app.stageRestoreMint(text) }
@@ -879,6 +981,47 @@ ShellRoot {
         Label { text: parent.heading; opacity: 0.6 }
         Label { text: parent.value; Layout.fillWidth: true; horizontalAlignment: parent.leading ? Text.AlignLeft : Text.AlignRight }
     }
+    // One onboarding step's stage. Steps stack in one frame and swap by a
+    // quiet materialize (scale 0.96 → 1 with the fade, entering after the
+    // tail of the exit), never a lateral push; reduced motion is a plain
+    // fade. The chassis below never moves.
+    component Stage: Item {
+        id: stage
+        property bool current: false
+        default property alias content: stageColumn.data
+        readonly property real contentHeight: stageColumn.implicitHeight
+        anchors.fill: parent
+        visible: opacity > 0
+        opacity: current ? 1 : 0
+        scale: current || motion.reduced ? 1 : 0.96
+        transformOrigin: Item.Center
+        Behavior on opacity {
+            SequentialAnimation {
+                PauseAnimation { duration: stage.current && !motion.reduced ? 100 : 0 }
+                NumberAnimation { duration: motion.reduced ? Motion.gentle : (stage.current ? 280 : 180); easing.type: Easing.BezierSpline; easing.bezierCurve: Motion.easeOut }
+            }
+        }
+        Behavior on scale { enabled: !motion.reduced; NumberAnimation { duration: 280; easing.type: Easing.BezierSpline; easing.bezierCurve: Motion.easeOut } }
+        ColumnLayout { id: stageColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; spacing: Style.space(16) }
+    }
+    // Every step titles itself at the top of its stage, on the same line,
+    // so the title stays put across the swap. The header rises 10 px into
+    // place as its stage enters; exits only fade.
+    component StepHeader: ColumnLayout {
+        id: stepHeader
+        property string title: ""
+        property string subhead: ""
+        property bool risen: true
+        property bool shown: true
+        Layout.fillWidth: true
+        spacing: Style.space(8)
+        transform: Translate {
+            y: motion.reduced || stepHeader.risen || stepHeader.shown ? 0 : 10
+            Behavior on y { enabled: stepHeader.risen; NumberAnimation { duration: 260; easing.type: Easing.BezierSpline; easing.bezierCurve: Motion.easeOut } }
+        }
+        Label { text: stepHeader.title; font.bold: true; font.pixelSize: Style.font.displayLarge; lineHeight: 1.1; Layout.fillWidth: true }
+        Label { visible: stepHeader.subhead !== ""; text: stepHeader.subhead; opacity: 0.65; lineHeight: 1.3; Layout.fillWidth: true }
+    }
     component ScanButtons: RowLayout {
         property string target: app.scanTarget
         Layout.fillWidth: true
@@ -930,6 +1073,7 @@ ShellRoot {
             Shortcut { sequence: "Ctrl+Comma"; enabled: !backend.review; onActivated: app.go("settings") }
         Controls.ScrollView {
             id: contentScroll
+            visible: !app.preWallet
             anchors.fill: parent
             anchors.margins: Style.space(app.compact ? 18 : 26)
             anchors.bottomMargin: navigation.visible ? navigation.height + Style.space(40) : Style.space(26)
@@ -990,134 +1134,6 @@ ShellRoot {
                     }
                 }
 
-                Welcome {
-                    id: welcome
-                    reducedMotion: motion.reduced
-                    presented: app.presented
-                    visible: backend.ready && !app.walletVisible && !backend.state.exists && !app.restoreMode
-                    Layout.fillWidth: true
-                    Layout.topMargin: Math.max(0, (contentScroll.availableHeight - implicitHeight - Style.space(80)) / 2)
-                    ready: backend.ready && desktopLock.safeToUnlock
-                    busy: backend.busy
-                    onCreateRequested: backend.request("create")
-                    onRestoreRequested: { app.startRestore(); app.restoreMode = true }
-                }
-                ColumnLayout {
-                    visible: !app.walletVisible && backend.state.exists && !app.restoreMode
-                    Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    Label { text: backend.state.password_required === false ? "Welcome back" : "Unlock your wallet"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Ui.TextField {
-                        id: password
-                        visible: backend.state.password_required !== false
-                        password: true
-                        placeholderText: "Wallet password"
-                        Layout.fillWidth: true
-                        onAccepted: if (unlockButton.enabled) unlockButton.clicked()
-                    }
-                    Action {
-                        id: unlockButton
-                        text: backend.busy ? "Opening…" : (backend.state.password_required === false ? "Open wallet" : "Unlock")
-                        Layout.fillWidth: true
-                        enabled: backend.ready && !backend.busy && desktopLock.safeToUnlock
-                            && (backend.state.password_required === false || password.text.length > 0)
-                        onClicked: backend.request("unlock", {password: password.text})
-                    }
-                    // The way out when the password is gone. Funds live at the
-                    // mints, so the wallet on this computer can be replaced.
-                    Divider { visible: backend.state.password_required !== false; Layout.topMargin: Style.space(8) }
-                    Label { visible: backend.state.password_required !== false; text: "Forgot your password?"; font.bold: true }
-                    Footer { visible: backend.state.password_required !== false; text: "Your funds are safe. They live at your mints, not on this computer. Restore with your recovery phrase to set up this wallet again with a new password. Without the phrase, a fresh wallet starts from zero." }
-                    Secondary { visible: backend.state.password_required !== false; text: "Restore with recovery phrase"; enabled: backend.ready && !backend.busy; onClicked: { app.startRestore(); app.restoreMode = true } }
-                    Secondary { visible: backend.state.password_required !== false; text: "Start a fresh wallet"; enabled: backend.ready && !backend.busy; onClicked: freshDialog.opened = true }
-                }
-                Label { visible: !app.walletVisible && !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
-                Label { visible: !app.walletVisible && !backend.ready && !backend.error; text: "Starting cashu.me…"; opacity: 0.65; Layout.fillWidth: true }
-                // ---- Restore, in three steps after cashubtc/wallet: the words,
-                // the mints to recover from, then each mint's result. From
-                // onboarding it installs a new wallet; from Settings it
-                // replaces the current one after a confirmation. Desktop
-                // liberty: the words go into one field rather than twelve.
-                ColumnLayout {
-                    id: restorePage
-                    readonly property bool onboarding: !app.walletVisible
-                    readonly property int mintCount: app.restoreMintList.length
-                    readonly property bool allSettled: app.restoreMintList.length > 0 && app.restoreMintList.every(mint => ["done", "failed"].indexOf((app.restoreResults[mint.url] || {}).status) >= 0)
-                    readonly property double recoveredTotal: app.restoreMintList.reduce((sum, mint) => sum + Number((app.restoreResults[mint.url] || {}).recovered || 0), 0)
-                    visible: !backend.review && ((app.walletVisible && app.page === "restore") || (!app.walletVisible && app.restoreMode))
-                    Layout.fillWidth: true
-                    spacing: Style.space(16)
-                    // Step 1: seed
-                    Label { visible: app.restoreStep === "seed"; text: "Restore Wallet"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { visible: app.restoreStep === "seed"; text: "Enter your 12 words in order."; opacity: 0.65; Layout.fillWidth: true }
-                    Controls.TextArea {
-                        id: restoreWords
-                        visible: app.restoreStep === "seed"
-                        Layout.fillWidth: true
-                        placeholderText: "Recovery words, separated by spaces"
-                        wrapMode: TextEdit.Wrap
-                        color: Color.foreground
-                        placeholderTextColor: Qt.alpha(Color.foreground, 0.5)
-                        font.family: Style.font.family
-                        text: app.restoreWordsText
-                        onTextChanged: if (text !== app.restoreWordsText) app.restoreWordsText = text
-                        background: Rectangle { color: "transparent"; radius: Style.cornerRadius; border.color: Qt.alpha(Color.foreground, 0.25) }
-                    }
-                    Label { visible: app.restoreStep === "seed"; text: app.restoreWordCount + " of 12 words"; opacity: 0.55; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
-                    Secondary { visible: app.restoreStep === "seed"; text: "Paste seed phrase"; onClicked: app.pasteInto("words") }
-                    Action { visible: app.restoreStep === "seed"; text: backend.busy ? "Checking…" : "Next"; enabled: backend.ready && !backend.busy && app.restoreWordCount === 12; onClicked: backend.request("validate_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " ")}) }
-                    Secondary { visible: app.restoreStep === "seed" && restorePage.onboarding; text: "Back"; onClicked: app.restoreMode = false }
-                    // Step 2: mints
-                    Label { visible: app.restoreStep === "mints"; text: "Restore Funds"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { visible: app.restoreStep === "mints"; text: "Add the mints you used before to recover funds from this seed."; opacity: 0.65; Layout.fillWidth: true }
-                    Ui.TextField { id: restoreMintField; visible: app.restoreStep === "mints"; Layout.fillWidth: true; placeholderText: "mint.example.com"; text: app.restoreMintInput; onTextEdited: app.restoreMintInput = text; onAccepted: app.stageRestoreMint(app.restoreMintInput) }
-                    RowLayout {
-                        visible: app.restoreStep === "mints"
-                        Layout.fillWidth: true
-                        spacing: Style.space(12)
-                        Tab { text: "Add"; enabled: app.restoreMintInput.trim() !== ""; onClicked: app.stageRestoreMint(app.restoreMintInput) }
-                        Tab { text: "Paste"; onClicked: app.pasteInto("mints") }
-                    }
-                    Label { visible: app.restoreStep === "mints" && app.restoreNotice !== ""; text: app.restoreNotice; opacity: 0.75; Layout.fillWidth: true }
-                    Repeater {
-                        model: app.restoreStep === "mints" ? app.restoreMintList : []
-                        delegate: Entry {
-                            required property var modelData
-                            icon: "󰭎"
-                            heading: modelData.url.replace(/^https?:\/\//, "")
-                            detail: modelData.url
-                            trailing: "󰅖"
-                            Accessible.name: "Remove mint " + modelData.url
-                            onClicked: app.restoreMintList = app.restoreMintList.filter(mint => mint.url !== modelData.url)
-                        }
-                    }
-                    Action {
-                        visible: app.restoreStep === "mints"
-                        text: restorePage.mintCount === 0 ? "Restore" : "Restore from " + restorePage.mintCount + (restorePage.mintCount === 1 ? " mint" : " mints")
-                        enabled: restorePage.mintCount > 0 && !backend.busy
-                        onClicked: app.beginRestore()
-                    }
-                    Secondary { visible: app.restoreStep === "mints"; text: "Back to seed phrase"; enabled: !backend.busy; onClicked: app.restoreStep = "seed" }
-                    // Step 3: progress
-                    Label { visible: app.restoreStep === "progress"; text: restorePage.allSettled ? "Restore Complete" : "Restoring…"; font.bold: true; font.pixelSize: Style.font.heading }
-                    Label { visible: app.restoreStep === "progress"; text: !restorePage.allSettled ? "Recovering funds from your mints…" : restorePage.recoveredTotal > 0 ? "Here's what we recovered." : "No funds found on these mints."; opacity: 0.65; Layout.fillWidth: true }
-                    Label { visible: app.restoreStep === "progress" && restorePage.recoveredTotal > 0; text: "󰄬  Recovered: " + app.amountLabel(restorePage.recoveredTotal); color: app.received; Layout.fillWidth: true }
-                    Repeater {
-                        model: app.restoreStep === "progress" ? app.restoreMintList : []
-                        delegate: Entry {
-                            required property var modelData
-                            readonly property var result: app.restoreResults[modelData.url] || {status: "pending"}
-                            icon: result.status === "done" ? (Number(result.recovered || 0) > 0 ? "󰄬" : "󰍶") : result.status === "failed" ? "󰅙" : "󰔟"
-                            iconColor: result.status === "done" && Number(result.recovered || 0) > 0 ? app.received : result.status === "failed" ? Color.urgent : Color.foreground
-                            heading: app.mintName(modelData.url) !== modelData.url ? app.mintName(modelData.url) : modelData.url.replace(/^https?:\/\//, "")
-                            detail: result.status === "failed" ? (result.error || "Could not restore this mint.") : modelData.url
-                            trailing: result.status === "done" ? app.amountLabel(result.recovered || 0) : result.status === "failed" ? "Retry" : result.status === "restoring" ? "Restoring…" : "Waiting"
-                            enabled: result.status === "failed" && !backend.busy
-                            onClicked: app.retryRestoreMint(modelData.url)
-                        }
-                    }
-                    Action { visible: app.restoreStep === "progress"; text: "Continue"; enabled: restorePage.allSettled && !backend.busy; onClicked: app.finishRestore() }
-                }
                 Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
                 Label { visible: scanner.running; text: "Scanning… Hold one QR code steady. Scanning stops after one minute."; Layout.fillWidth: true; opacity: 0.65 }
                 Secondary { visible: scanner.running; text: "Cancel scan"; onClicked: scanner.running = false }
@@ -1977,6 +1993,529 @@ ShellRoot {
                     ToggleRow { heading: "Paste ecash automatically"; detail: "Reads a Cashu token from the clipboard when the receive page opens."; checked: app.privacy.auto_paste !== false; enabled: !backend.busy; onToggled: app.setPrivacy({auto_paste: !app.privacy.auto_paste}) }
                     Footer { text: "Checks contact the mint over the network — more checks mean faster updates, fewer give the mint less to see." }
                 }
+            }
+        }
+        // ---- Every screen before the wallet, after cashubtc/wallet's
+        // onboarding: a live stage above a pinned action chassis, one frame
+        // for Welcome, the seed phrase, the first mint, unlock and restore.
+        // The chassis never moves between steps; only its labels change.
+        // The ASCII terrain runs behind Welcome and morphs into a vault door
+        // behind the restore words; every other step is open space.
+        Item {
+            id: onboarding
+            // A phone-sized frame: in a tall window the chassis pins at
+            // most this far down, like the wallet's own pinned pages,
+            // rather than sinking to the bottom of a void.
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: Math.min(parent.height, Style.space(640))
+            visible: app.preWallet
+            readonly property real gutter: Style.space(app.compact ? 18 : 26)
+            readonly property string step: {
+                if (app.conceptOpen) return "concept"
+                if (app.walletVisible) return "restore_" + app.restoreStep
+                if (!backend.ready) return "starting"
+                if (app.restoreMode) return "restore_" + app.restoreStep
+                if (app.onboardingOpen) return app.onboardingStep
+                if (backend.state.exists) return "unlock"
+                return "welcome"
+            }
+            readonly property bool showsField: step === "welcome" || step === "restore_seed"
+            readonly property bool canGoBack: ["seed", "mint", "concept", "restore_seed", "restore_mints"].indexOf(step) >= 0 && !(step === "mint" && app.firstMintQueue.length > 0)
+            readonly property bool passwordRequired: backend.state.password_required !== false
+            // First launch: the title settles, then the field fades in over
+            // 0.9 s. Afterwards it fades with the step swap.
+            property bool fieldEntered: false
+            property int fieldFade: 900
+            onStepChanged: {
+                if (showsField && !fieldEntered) entrance.start()
+                stageScroll.contentItem.contentY = 0
+            }
+            Component.onCompleted: if (showsField) entrance.start()
+            Timer { id: entrance; interval: motion.reduced ? 0 : 450; onTriggered: { onboarding.fieldEntered = true; settle.start() } }
+            Timer { id: settle; interval: 950; onTriggered: onboarding.fieldFade = 280 }
+            // The field's geometry: clear behind the tallest header of the
+            // pair, then opaque, then a fade to a faint floor behind the
+            // chassis. The vault sits in the space below the restore card.
+            readonly property real headerClearance: band.y + band.height + Style.space(8) + welcomeHeader.implicitHeight
+            readonly property real chassisInset: height - chassis.y
+            readonly property var fieldLayout: Field.resolve(height, headerClearance, chassisInset, stageScroll.y + restoreSeedStage.contentHeight + Style.space(8))
+            // Unset comes back null, not "", and Number(null) is 0: a frozen field.
+            readonly property real staticTime: { var value = Quickshell.env("CASHU_ME_ASCII_STATIC_TIME"); return value ? Number(value) : NaN }
+            readonly property bool fieldShown: showsField && fieldEntered && !fieldLayout.suppressed
+
+            AsciiField {
+                id: field
+                anchors.fill: parent
+                active: onboarding.showsField && onboarding.visible && app.presented && !onboarding.fieldLayout.suppressed && !app.conceptOpen
+                reducedMotion: motion.reduced
+                staticTime: onboarding.staticTime
+                ink: Color.foreground
+                dark: Color.background.hslLightness < 0.5
+                fontFamily: Style.font.family
+                mask: onboarding.fieldLayout
+                vaultCenterY: onboarding.fieldLayout.vaultCenterY
+                // Welcome's terrain deforms into the restore step's vault
+                // door on the step swap, and back.
+                vaultMix: onboarding.step === "restore_seed" ? 1 : 0
+                Behavior on vaultMix { enabled: !motion.reduced && isNaN(onboarding.staticTime); NumberAnimation { duration: 280; easing.type: Easing.InOutQuad } }
+                lensEnabled: !motion.reduced
+                opacity: onboarding.fieldShown ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: motion.reduced ? Motion.gentle : onboarding.fieldFade; easing.type: Easing.OutCubic } }
+            }
+
+            // The bar band: Back on the left where a step has one, the help
+            // and expand controls on the right. Back keeps its slot and only
+            // fades, so nothing shifts between steps.
+            RowLayout {
+                id: band
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: onboarding.gutter
+                spacing: Style.space(6)
+                IconButton {
+                    iconText: "󰁍"
+                    Accessible.name: "Back"
+                    Accessible.ignored: !onboarding.canGoBack
+                    enabled: onboarding.canGoBack && !backend.busy
+                    opacity: onboarding.canGoBack ? (enabled ? 1 : 0.4) : 0
+                    onClicked: app.back()
+                }
+                Item { Layout.fillWidth: true }
+                IconButton {
+                    visible: onboarding.step === "welcome" || onboarding.step === "starting"
+                    iconText: "󰘥"
+                    Accessible.name: "What is ecash?"
+                    enabled: onboarding.step === "welcome"
+                    onClicked: app.conceptOpen = true
+                }
+                IconButton {
+                    iconText: app.compact ? "󰁜" : "󰁃"
+                    Accessible.name: app.compact ? "Expand to window" : "Return to panel"
+                    onClicked: app.present(app.compact)
+                }
+            }
+
+            Controls.ScrollView {
+                id: stageScroll
+                anchors.top: band.bottom
+                anchors.topMargin: Style.space(8)
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: chassis.top
+                anchors.leftMargin: onboarding.gutter
+                anchors.rightMargin: onboarding.gutter
+                anchors.bottomMargin: Style.space(12)
+                contentWidth: availableWidth
+                clip: true
+                Item {
+                    id: stack
+                    width: stageScroll.availableWidth
+                    readonly property real currentHeight: {
+                        switch (onboarding.step) {
+                        case "welcome": return welcomeStage.contentHeight
+                        case "starting": return startingStage.contentHeight
+                        case "seed": return seedStage.contentHeight
+                        case "mint": return mintStage.contentHeight
+                        case "concept": return conceptStage.contentHeight
+                        case "unlock": return unlockStage.contentHeight
+                        case "restore_seed": return restoreSeedStage.contentHeight
+                        case "restore_mints": return restoreMintsStage.contentHeight
+                        case "restore_progress": return restoreProgressStage.contentHeight
+                        default: return 0
+                        }
+                    }
+                    height: Math.max(stageScroll.availableHeight, currentHeight)
+
+                    Stage {
+                        id: startingStage
+                        current: onboarding.step === "starting"
+                        StepHeader { risen: startingStage.current; shown: startingStage.visible; title: "Starting cashu.me…" }
+                    }
+                    Stage {
+                        id: welcomeStage
+                        current: onboarding.step === "welcome"
+                        StepHeader { id: welcomeHeader; risen: welcomeStage.current; shown: welcomeStage.visible; title: "Private cash.\nOn your desktop."; subhead: "An ecash wallet for Bitcoin and Lightning." }
+                        Label { visible: !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
+                    }
+                    // What is ecash?, the reference's concept sheet, as a step.
+                    Stage {
+                        id: conceptStage
+                        current: onboarding.step === "concept"
+                        StepHeader { risen: conceptStage.current; shown: conceptStage.visible; title: "Ecash is bearer cash for Bitcoin." }
+                        Label { text: "Whoever holds it, owns it. Your balance stays on this device, hidden from everyone else."; opacity: 0.75; lineHeight: 1.3; Layout.fillWidth: true }
+                        Label { text: "Mints hold the Bitcoin behind your ecash. You can use several at once."; opacity: 0.75; lineHeight: 1.3; Layout.fillWidth: true }
+                        Label { text: "Send instantly. Cash out to Lightning anytime."; opacity: 0.75; lineHeight: 1.3; Layout.fillWidth: true }
+                    }
+                    // The seed phrase: a card that reveals on tap and hides on
+                    // the next, the words in a numbered three-column grid.
+                    // While hidden the words are never on screen at all; the
+                    // worker only sends them when the card is opened.
+                    Stage {
+                        id: seedStage
+                        current: onboarding.step === "seed"
+                        StepHeader { risen: seedStage.current; shown: seedStage.visible; title: "Your seed phrase."; subhead: "Write these 12 words down in order. This is the only way to recover your wallet." }
+                        Button {
+                            id: seedCard
+                            readonly property bool revealed: backend.recoveryPhrase !== ""
+                            readonly property var words: revealed ? backend.recoveryPhrase.split(" ") : []
+                            text: ""
+                            focusable: true
+                            background: Qt.alpha(Color.foreground, 0.07)
+                            Layout.fillWidth: true
+                            Layout.topMargin: Style.space(8)
+                            implicitHeight: seedGrid.implicitHeight + Style.space(40)
+                            Accessible.name: revealed ? "Hide seed phrase" : "Reveal seed phrase"
+                            onClicked: app.toggleSeedReveal()
+                            // Keeps the words up while they are being copied
+                            // down; the worker's own one-minute limit resumes
+                            // once the card is closed or the step is left.
+                            Timer { running: seedStage.current && seedCard.revealed; interval: 30000; repeat: true; onTriggered: backend.phraseTimer.restart() }
+                            GridLayout {
+                                id: seedGrid
+                                anchors.fill: parent
+                                anchors.margins: Style.space(20)
+                                columns: 3
+                                rowSpacing: Style.space(12)
+                                columnSpacing: Style.space(12)
+                                opacity: seedCard.revealed ? 1 : 0.18
+                                Repeater {
+                                    model: 12
+                                    delegate: RowLayout {
+                                        required property int index
+                                        spacing: Style.space(6)
+                                        Layout.fillWidth: true
+                                        Label { text: (index + 1 < 10 ? "0" : "") + (index + 1); opacity: 0.45; font.pixelSize: Style.font.caption; Layout.preferredWidth: Style.space(18); horizontalAlignment: Text.AlignRight }
+                                        Label { text: seedCard.revealed ? (seedCard.words[index] || "") : "••••••"; font.bold: seedCard.revealed; Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                visible: !seedCard.revealed
+                                anchors.centerIn: parent
+                                spacing: Style.space(4)
+                                Label { text: "󰈈"; font.pixelSize: Style.font.iconLarge; opacity: 0.8; Layout.alignment: Qt.AlignHCenter }
+                                Label { text: "Tap to reveal"; opacity: 0.7; font.pixelSize: Style.font.bodySmall; Layout.alignment: Qt.AlignHCenter }
+                            }
+                        }
+                        Button { text: "󰆏  Copy"; focusable: true; opacity: enabled ? 0.8 : 0.35; enabled: seedCard.revealed && !clipboard.running; Layout.alignment: Qt.AlignHCenter; onClicked: app.copyText(backend.recoveryPhrase, "recovery phrase") }
+                    }
+                    // Pick your first mint: the suggested mints as rows that
+                    // toggle, a URL of your own as a further row, and Skip.
+                    Stage {
+                        id: mintStage
+                        current: onboarding.step === "mint"
+                        StepHeader { risen: mintStage.current; shown: mintStage.visible; title: "Pick your first mint."; subhead: "Mints issue your ecash and redeem it for Bitcoin. Add more anytime in Settings." }
+                        Repeater {
+                            model: app.suggestions.concat(app.firstMintCustom.map(url => ({url: url, name: url.replace(/^https?:\/\//, ""), icon_url: ""})))
+                            delegate: Entry {
+                                required property var modelData
+                                readonly property bool picked: app.firstMintSelection.indexOf(modelData.url) >= 0
+                                avatar: modelData.icon_url || ""
+                                monogram: modelData.name
+                                heading: modelData.name
+                                detail: modelData.url.replace(/^https?:\/\//, "")
+                                trailing: picked ? "󰗠" : "󰄰"
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.checked: picked
+                                enabled: app.firstMintQueue.length === 0 && !backend.busy
+                                onClicked: app.toggleFirstMint(modelData.url)
+                            }
+                        }
+                        Button { visible: !app.firstMintInputOpen; text: "󰐕  Add by URL"; focusable: true; opacity: 0.8; enabled: app.firstMintQueue.length === 0; Layout.alignment: Qt.AlignHCenter; onClicked: { app.firstMintInputOpen = true; firstMintField.forceActiveFocus() } }
+                        RowLayout {
+                            visible: app.firstMintInputOpen
+                            Layout.fillWidth: true
+                            spacing: Style.space(8)
+                            Ui.TextField { id: firstMintField; Layout.fillWidth: true; placeholderText: "mint.example.com"; text: app.firstMintInput; enabled: app.firstMintQueue.length === 0; onTextEdited: app.firstMintInput = text; onAccepted: app.commitFirstMint() }
+                            SquareIcon { iconText: app.firstMintInput.trim() === "" ? "󰅍" : "󰁔"; Accessible.name: app.firstMintInput.trim() === "" ? "Paste from clipboard" : "Add mint"; Layout.preferredHeight: firstMintField.implicitHeight; enabled: app.firstMintQueue.length === 0; onClicked: app.firstMintInput.trim() === "" ? app.pasteInto("first_mint") : app.commitFirstMint() }
+                        }
+                        Label { visible: app.firstMintNotice !== ""; text: app.firstMintNotice; opacity: 0.75; Layout.fillWidth: true }
+                        Label { visible: app.firstMintQueue.length > 0; text: "Connecting to " + (app.firstMintQueue[0] || "").replace(/^https?:\/\//, "") + "…"; opacity: 0.6; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                    }
+                    Stage {
+                        id: unlockStage
+                        current: onboarding.step === "unlock"
+                        StepHeader { risen: unlockStage.current; shown: unlockStage.visible; title: onboarding.passwordRequired ? "Unlock your wallet." : "Welcome back."; subhead: onboarding.passwordRequired ? "Enter your wallet password to open it." : "" }
+                        Label { visible: !desktopLock.safeToUnlock; text: "Waiting for an unlocked Omarchy desktop."; opacity: 0.65; Layout.fillWidth: true }
+                        // The way out when the password is gone. Funds live at
+                        // the mints, so the wallet on this computer can be replaced.
+                        Label { visible: onboarding.passwordRequired; text: "Forgot your password?"; font.bold: true; Layout.topMargin: Style.space(8) }
+                        Footer { visible: onboarding.passwordRequired; text: "Your funds are safe. They live at your mints, not on this computer. Restore with your recovery phrase to set up this wallet again with a new password. Without the phrase, a fresh wallet starts from zero." }
+                        Button { visible: onboarding.passwordRequired; text: "Start a fresh wallet"; focusable: true; opacity: enabled ? 0.8 : 0.35; enabled: backend.ready && !backend.busy; onClicked: freshDialog.opened = true }
+                    }
+                    // ---- Restore, in three steps after cashubtc/wallet: the
+                    // words, the mints to recover from, then each mint's result.
+                    // From onboarding it installs a new wallet; from Settings it
+                    // replaces the current one after a confirmation. Desktop
+                    // liberty: the words go into one field rather than twelve.
+                    Stage {
+                        id: restoreSeedStage
+                        current: onboarding.step === "restore_seed"
+                        StepHeader { risen: restoreSeedStage.current; shown: restoreSeedStage.visible; title: "Restore wallet."; subhead: "Enter your 12 words in order." }
+                        Controls.TextArea {
+                            id: restoreWords
+                            Layout.fillWidth: true
+                            Layout.topMargin: Style.space(8)
+                            placeholderText: "Recovery words, separated by spaces"
+                            wrapMode: TextEdit.Wrap
+                            color: Color.foreground
+                            placeholderTextColor: Qt.alpha(Color.foreground, 0.5)
+                            font.family: Style.font.family
+                            text: app.restoreWordsText
+                            onTextChanged: if (text !== app.restoreWordsText) app.restoreWordsText = text
+                            // Opaque: the vault door runs behind this step, and
+                            // typed words must not sit on its glyphs.
+                            background: Rectangle { color: surface.color; radius: Style.cornerRadius; border.color: Qt.alpha(Color.foreground, 0.25) }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(12)
+                            Label { text: app.restoreWordCount + " of 12 words"; opacity: 0.55; font.pixelSize: Style.font.caption; Layout.fillWidth: true }
+                            Button { text: "󰅍  Paste"; focusable: true; opacity: 0.8; onClicked: app.pasteInto("words") }
+                        }
+                    }
+                    Stage {
+                        id: restoreMintsStage
+                        current: onboarding.step === "restore_mints"
+                        StepHeader { risen: restoreMintsStage.current; shown: restoreMintsStage.visible; title: "Add your mints."; subhead: "Your seed phrase doesn't record which mints you used. Add the mints you used before to recover funds from them." }
+                        Ui.TextField { id: restoreMintField; Layout.fillWidth: true; Layout.topMargin: Style.space(8); placeholderText: "mint.example.com"; text: app.restoreMintInput; onTextEdited: app.restoreMintInput = text; onAccepted: app.stageRestoreMint(app.restoreMintInput) }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(12)
+                            Tab { text: "Add"; enabled: app.restoreMintInput.trim() !== ""; onClicked: app.stageRestoreMint(app.restoreMintInput) }
+                            Tab { text: "Paste"; onClicked: app.pasteInto("mints") }
+                        }
+                        Label { visible: app.restoreNotice !== ""; text: app.restoreNotice; opacity: 0.75; Layout.fillWidth: true }
+                        Repeater {
+                            model: onboarding.step === "restore_mints" ? app.restoreMintList : []
+                            delegate: Entry {
+                                required property var modelData
+                                icon: "󰭎"
+                                heading: modelData.url.replace(/^https?:\/\//, "")
+                                detail: modelData.url
+                                trailing: "󰅖"
+                                Accessible.name: "Remove mint " + modelData.url
+                                onClicked: app.restoreMintList = app.restoreMintList.filter(mint => mint.url !== modelData.url)
+                            }
+                        }
+                    }
+                    Stage {
+                        id: restoreProgressStage
+                        current: onboarding.step === "restore_progress"
+                        StepHeader { risen: restoreProgressStage.current; shown: restoreProgressStage.visible; title: restorePage.allSettled ? "Wallet restored." : "Restoring wallet."; subhead: !restorePage.allSettled ? "Recovering funds from your mints…" : restorePage.recoveredTotal > 0 ? "Here's what we recovered." : "No funds found on these mints." }
+                        Label { visible: restorePage.recoveredTotal > 0; text: "󰄬  Recovered: " + app.amountLabel(restorePage.recoveredTotal); color: app.received; Layout.fillWidth: true }
+                        Repeater {
+                            model: onboarding.step === "restore_progress" ? app.restoreMintList : []
+                            delegate: Entry {
+                                required property var modelData
+                                readonly property var result: app.restoreResults[modelData.url] || {status: "pending"}
+                                icon: result.status === "done" ? (Number(result.recovered || 0) > 0 ? "󰄬" : "󰍶") : result.status === "failed" ? "󰅙" : "󰔟"
+                                iconColor: result.status === "done" && Number(result.recovered || 0) > 0 ? app.received : result.status === "failed" ? Color.urgent : Color.foreground
+                                heading: app.mintName(modelData.url) !== modelData.url ? app.mintName(modelData.url) : modelData.url.replace(/^https?:\/\//, "")
+                                detail: result.status === "failed" ? (result.error || "Could not restore this mint.") : modelData.url
+                                trailing: result.status === "done" ? app.amountLabel(result.recovered || 0) : result.status === "failed" ? "Retry" : result.status === "restoring" ? "Restoring…" : "Waiting"
+                                enabled: result.status === "failed" && !backend.busy
+                                onClicked: app.retryRestoreMint(modelData.url)
+                            }
+                        }
+                    }
+                }
+            }
+            QtObject {
+                id: restorePage
+                readonly property int mintCount: app.restoreMintList.length
+                readonly property bool allSettled: app.restoreMintList.length > 0 && app.restoreMintList.every(mint => ["done", "failed"].indexOf((app.restoreResults[mint.url] || {}).status) >= 0)
+                readonly property double recoveredTotal: app.restoreMintList.reduce((sum, mint) => sum + Number((app.restoreResults[mint.url] || {}).recovered || 0), 0)
+            }
+
+            // The chassis: an accessory that argues for the primary directly
+            // above it (the seed acknowledgement, the password), the primary,
+            // and one second row that is the secondary, the text link, or
+            // reserved space, so the primary sits on the same line on every
+            // step.
+            ColumnLayout {
+                id: chassis
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: onboarding.gutter
+                anchors.rightMargin: onboarding.gutter
+                anchors.bottomMargin: Style.space(app.compact ? 14 : 26)
+                spacing: Style.space(12)
+                readonly property string primaryText: {
+                    switch (onboarding.step) {
+                    case "welcome": return backend.busy && backend.pendingMethod === "create" ? "Creating your wallet…" : "Create Wallet"
+                    case "seed": return "I've Saved My Seed Phrase"
+                    case "mint": return app.firstMintQueue.length > 0 ? "Adding…" : "Continue"
+                    case "concept": return "Got it"
+                    case "unlock": return backend.busy ? "Opening…" : (onboarding.passwordRequired ? "Unlock" : "Open wallet")
+                    case "restore_seed": return backend.busy && backend.pendingMethod === "validate_phrase" ? "Checking…" : "Continue"
+                    case "restore_mints": return restorePage.mintCount === 0 ? "Restore" : "Restore from " + restorePage.mintCount + (restorePage.mintCount === 1 ? " mint" : " mints")
+                    case "restore_progress": return "Continue"
+                    default: return ""
+                    }
+                }
+                readonly property bool primaryEnabled: {
+                    if (backend.busy) return false
+                    switch (onboarding.step) {
+                    case "welcome": return backend.ready && desktopLock.safeToUnlock
+                    case "seed": return app.seedAcknowledged
+                    case "mint": return app.firstMintSelection.length > 0 || app.firstMintInput.trim() !== ""
+                    case "concept": return true
+                    case "unlock": return backend.ready && desktopLock.safeToUnlock && (!onboarding.passwordRequired || password.text.length > 0)
+                    case "restore_seed": return backend.ready && app.restoreWordCount === 12
+                    case "restore_mints": return restorePage.mintCount > 0
+                    case "restore_progress": return restorePage.allSettled
+                    default: return false
+                    }
+                }
+                function primary() {
+                    switch (onboarding.step) {
+                    case "welcome": if (app.onboardingOpen) app.onboardingStep = "seed"; else backend.request("create"); break
+                    case "seed": app.onboardingStep = "mint"; break
+                    case "mint": app.continueFirstMint(); break
+                    case "concept": app.conceptOpen = false; break
+                    case "unlock": backend.request("unlock", {password: password.text}); break
+                    case "restore_seed": backend.request("validate_phrase", {phrase: app.restoreWordsText.trim().replace(/\s+/g, " ")}); break
+                    case "restore_mints": app.beginRestore(); break
+                    case "restore_progress": app.finishRestore(); break
+                    }
+                }
+                readonly property string secondaryText: onboarding.step === "welcome" ? "Restore Wallet" : (onboarding.step === "unlock" && onboarding.passwordRequired ? "Restore with recovery phrase" : "")
+                readonly property string tertiaryText: onboarding.step === "mint" ? "Skip for now" : ""
+                function secondary() { app.startRestore(); app.restoreMode = true }
+
+                Label { visible: backend.error !== ""; text: backend.error; color: Color.urgent; Layout.fillWidth: true }
+                // The seed acknowledgement, with the warning it answers.
+                ColumnLayout {
+                    visible: onboarding.step === "seed"
+                    Layout.fillWidth: true
+                    spacing: Style.space(10)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.space(12)
+                        Label { text: "󰀦"; color: Color.urgent; font.pixelSize: Style.font.heading; Layout.preferredWidth: Style.space(24); horizontalAlignment: Text.AlignHCenter }
+                        Label { text: "Never share these words with anyone."; color: Color.urgent; Layout.fillWidth: true }
+                    }
+                    Button {
+                        id: seedAcknowledge
+                        text: ""
+                        focusable: true
+                        Layout.fillWidth: true
+                        implicitHeight: ackRow.implicitHeight + Style.space(12)
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.checked: app.seedAcknowledged
+                        Accessible.name: "I've written down my seed phrase and stored it safely."
+                        onClicked: app.seedAcknowledged = !app.seedAcknowledged
+                        RowLayout {
+                            id: ackRow
+                            anchors.fill: parent
+                            anchors.margins: Style.space(6)
+                            spacing: Style.space(12)
+                            Label { text: app.seedAcknowledged ? "󰗠" : "󰄰"; font.pixelSize: Style.font.heading; opacity: app.seedAcknowledged ? 1 : 0.6; Layout.preferredWidth: Style.space(24); horizontalAlignment: Text.AlignHCenter }
+                            Label { text: "I've written down my seed phrase and stored it safely."; opacity: 0.75; Layout.fillWidth: true }
+                        }
+                    }
+                }
+                Ui.TextField {
+                    id: password
+                    visible: onboarding.step === "unlock" && onboarding.passwordRequired
+                    password: true
+                    placeholderText: "Wallet password"
+                    Layout.fillWidth: true
+                    onAccepted: if (chassisPrimary.enabled) chassisPrimary.clicked()
+                }
+                Action {
+                    id: chassisPrimary
+                    text: chassis.primaryText
+                    visible: chassis.primaryText !== ""
+                    enabled: chassis.primaryEnabled
+                    Layout.minimumHeight: Style.space(42)
+                    onClicked: if (enabled) chassis.primary()
+                }
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Style.space(42)
+                    Secondary {
+                        id: chassisSecondary
+                        anchors.fill: parent
+                        visible: chassis.secondaryText !== ""
+                        text: chassis.secondaryText
+                        enabled: backend.ready && !backend.busy
+                        onClicked: chassis.secondary()
+                    }
+                    Button {
+                        id: chassisTertiary
+                        anchors.fill: parent
+                        visible: chassis.tertiaryText !== ""
+                        text: chassis.tertiaryText
+                        focusable: true
+                        enabled: !backend.busy && app.firstMintQueue.length === 0
+                        opacity: enabled ? 0.8 : 0.35
+                        onClicked: app.finishOnboarding()
+                    }
+                }
+            }
+        }
+        // ---- The handoff: the terrain sweeps down over the last onboarding
+        // step, the wallet mounts beneath it at full cover, and the curtain
+        // erodes level by level until the ₿ peaks are the last thing over
+        // the balance. Nothing translates and no edge travels after the
+        // sweep; the motion is the field's own.
+        Item {
+            id: handoff
+            anchors.fill: parent
+            visible: false
+            z: 15
+            property real sweep: 0
+            property real erosion: 0
+            function begin() {
+                if (visible) return
+                sweep = 0; erosion = 0; visible = true
+                run.start()
+            }
+            // Runs the gate flip if it hasn't happened and drops the overlay
+            // with no animation, so a lock mid-sweep never strands the user.
+            function finishImmediately() {
+                if (!visible) return
+                run.stop()
+                visible = false
+                if (app.onboardingOpen || app.restoreMode) app.completeGate()
+            }
+            MouseArea { anchors.fill: parent }
+            AsciiField {
+                id: curtain
+                anchors.fill: parent
+                curtain: true
+                active: handoff.visible && app.presented
+                staticTime: onboarding.staticTime
+                ink: Color.foreground
+                dark: Color.background.hslLightness < 0.5
+                fontFamily: Style.font.family
+                scrim: surface.color
+                sweep: handoff.sweep
+                erosion: handoff.erosion
+            }
+            SequentialAnimation {
+                id: run
+                NumberAnimation { target: handoff; property: "sweep"; from: 0; to: 1; duration: 450; easing.type: Easing.BezierSpline; easing.bezierCurve: Motion.easeOut }
+                ScriptAction { script: app.completeGate() }
+                PauseAnimation { duration: 30 }
+                ScriptAction { script: if (isNaN(onboarding.staticTime)) curtain.pressAt(handoff.width / 2, handoff.height / 2) }
+                PauseAnimation { duration: 270 }
+                ParallelAnimation {
+                    // Linear on purpose: every stage of the exit carries its
+                    // own smoothstep; easing the driver too would stall it.
+                    NumberAnimation { target: handoff; property: "erosion"; from: 0; to: 1; duration: 1000 }
+                    SequentialAnimation {
+                        PauseAnimation { duration: 10 }
+                        ScriptAction { script: curtain.releaseLens() }
+                    }
+                }
+                ScriptAction { script: handoff.visible = false }
             }
         }
         RowLayout {

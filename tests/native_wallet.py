@@ -16,8 +16,15 @@ OMARCHY = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
 CONTROLS = '''
     IpcHandler {
         target: "test"
-        function create(): void { if (welcome.createAction.enabled) welcome.createAction.clicked() }
-        function unlock(): void { password.text = "temporary native test password"; if (unlockButton.enabled) unlockButton.clicked() }
+        function create(): void { if (onboarding.step === "welcome" && chassisPrimary.enabled) chassisPrimary.clicked() }
+        function unlock(): void { password.text = "temporary native test password"; if (onboarding.step === "unlock" && chassisPrimary.enabled) chassisPrimary.clicked() }
+        // The seed step: reveal the words, acknowledge, and continue.
+        function reveal(): void { if (onboarding.step === "seed") seedCard.clicked() }
+        function acknowledge(): void { if (onboarding.step === "seed") { seedAcknowledge.clicked(); if (chassisPrimary.enabled) chassisPrimary.clicked() } }
+        // The first-mint step: a URL of our own, then Continue.
+        function firstMint(url: string): void { if (onboarding.step === "mint") { app.firstMintInputOpen = true; app.firstMintInput = url; if (chassisPrimary.enabled) chassisPrimary.clicked() } }
+        function skipMint(): void { if (onboarding.step === "mint") chassisTertiary.clicked() }
+        function restore(): void { if (onboarding.step === "welcome") chassisSecondary.clicked() }
         function protect(): void {
             app.go("settings")
             app.go("app_lock")
@@ -42,6 +49,7 @@ CONTROLS = '''
             return JSON.stringify({ready: backend.ready, busy: backend.busy, unlocked: backend.unlocked,
                 passwordRequired: backend.state.password_required, safe: desktopLock.safeToUnlock, error: backend.error, page: app.page,
                 hasPhrase: backend.recoveryPhrase !== "", hasShare: !!backend.share.token || !!backend.share.invoice,
+                step: app.preWallet ? onboarding.step : "", walletVisible: app.walletVisible, handoff: handoff.visible,
                 hasQr: !!backend.share.qr, hasReview: !!backend.review,
                 completionAmount: backend.completion.amount || "", activityCount: app.activity.length, balance: app.selectedMint.spendable, mints: (backend.state.mints || []).length})
         }
@@ -113,10 +121,33 @@ ShellRoot {
                         self.fail("UI state did not converge: " + (base / "qml.log").read_text())
                     wait(lambda s: s["ready"] and s["safe"])
                     if environment.get("CASHU_ME_TEST_CAPTURE"):
+                        # The welcome field fades in 0.45 s after the title settles.
+                        time.sleep(1.6)
                         call("capture")
                         time.sleep(0.3)
                         self.assertTrue(Path(environment["CASHU_ME_TEST_CAPTURE"]).is_file(), (base / "qml.log").read_text())
-                    call("create"); wait(lambda s: s["unlocked"] and not s["busy"])
+                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-welcome.png"))
+                    # Restore from Welcome is one step in and one step back.
+                    call("restore"); wait(lambda s: s["step"] == "restore_seed")
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
+                        time.sleep(0.6); call("capture"); time.sleep(0.3)
+                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-restore.png"))
+                    call("back"); wait(lambda s: s["step"] == "welcome")
+                    # Onboarding, after cashubtc/wallet: create, then the seed
+                    # phrase behind a tap-to-reveal card and an acknowledgement,
+                    # then the first mint, then the handoff into the wallet.
+                    call("create"); wait(lambda s: s["unlocked"] and not s["busy"] and s["step"] == "seed")
+                    self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["walletVisible"])
+                    call("reveal"); wait(lambda s: s["hasPhrase"] and not s["busy"])
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
+                        time.sleep(0.4); call("capture"); time.sleep(0.3)
+                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-seed.png"))
+                    call("acknowledge"); wait(lambda s: s["step"] == "mint" and not s["hasPhrase"])
+                    if environment.get("CASHU_ME_TEST_CAPTURE"):
+                        time.sleep(0.4); call("capture"); time.sleep(0.3)
+                        shutil.copy(environment["CASHU_ME_TEST_CAPTURE"], Path(environment["CASHU_ME_TEST_CAPTURE"]).with_name("capture-onboarding-mint.png"))
+                    call("firstMint", "http://127.0.0.1:33381")
+                    wait(lambda s: s["mints"] == 1 and s["walletVisible"] and not s["handoff"] and s["page"] == "home" and not s["busy"])
                     self.assertFalse(json.loads(ipc(ui, "test", "inspect").stdout)["passwordRequired"])
                     # With no password, a hidden wallet should stop on desktop
                     # lock and reopen automatically when the desktop unlocks.
@@ -126,7 +157,6 @@ ShellRoot {
                     self.assertEqual(ipc(shell, "lock", "setLocked", "false").returncode, 0)
                     wait(lambda s: s["unlocked"] and not s["busy"])
                     self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
-                    call("mint"); wait(lambda s: s["mints"] == 1 and not s["busy"])
                     call("invoice"); wait(lambda s: s["hasShare"] and s["hasQr"] and not s["busy"])
                     self.assertEqual(ipc(ui, "wallet", "hide").returncode, 0)
                     # No Refresh call: prove the hidden wallet's timer mints the invoice.

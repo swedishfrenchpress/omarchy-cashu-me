@@ -17,7 +17,8 @@
     "id": "antifiat",
     "name": "Antifiat",
     "url": "https://antifiat.cash",
-    "infoUrl": "https://antifiat.cash/v1/info"
+    "infoUrl": "https://antifiat.cash/v1/info",
+    "icon_url": "https://image.nostr.build/29d1e6b5a5fd205fa16ec0470d335984b25ea4be9a7ce5481e60aebde3f27beb.png"
   },
   {
     "id": "macadamia",
