@@ -59,6 +59,11 @@ ShellRoot {
     property var transaction: ({})
     property bool revealShare: false
     readonly property bool mainPage: ["home", "history", "mints"].indexOf(page) >= 0
+    // An ecash send has no review step in the reference: Send on the amount
+    // page creates the token. The worker still prepares and then confirms,
+    // so the prepared review is confirmed the moment it arrives and never
+    // shown; Lightning payments, receipts and reclaims keep their review.
+    readonly property bool ecashAutoConfirm: !!backend.review && backend.review.kind === "Send ecash" && !backend.review.reclaim && !backend.review.receiving
     // The reference's History filter is by status, All / Pending / Completed,
     // not by direction; a failed payment shows only under All.
     readonly property var activity: (backend.state.history || []).filter(tx => {
@@ -557,6 +562,7 @@ ShellRoot {
     WalletBackend {
         id: backend
         onShowResult: { app.revealShare = false; app.trail = []; app.page = "share" }
+        onReviewChanged: if (app.ecashAutoConfirm) backend.request("confirm_payment", {review_id: backend.reviewId})
         onPaymentFinished: { app.trail = []; app.page = "complete" }
         onMintAdded: app.finishAddMint()
         onReadyChanged: {
@@ -1296,7 +1302,7 @@ ShellRoot {
                 Secondary { visible: scanner.running; text: "Cancel scan"; onClicked: scanner.running = false }
 
                 ColumnLayout {
-                    visible: !!backend.review
+                    visible: !!backend.review && !app.ecashAutoConfirm
                     Layout.fillWidth: true
                     spacing: Style.space(22)
                     Label { text: backend.review ? backend.review.kind : ""; font.pixelSize: Style.font.heading; font.bold: true }
@@ -1471,7 +1477,7 @@ ShellRoot {
                     Entry { id: lightningChoice; visible: app.mints.length > 0; icon: "󱐋"; heading: "Lightning"; detail: "Create an invoice to receive from another wallet"; onClicked: { app.entryText = ""; app.go("receive_amount") } }
                 }
                 ColumnLayout {
-                    visible: app.walletVisible && !backend.review && (app.page === "send_amount" || app.page === "receive_amount")
+                    visible: app.walletVisible && (!backend.review || app.ecashAutoConfirm) && (app.page === "send_amount" || app.page === "receive_amount")
                     Layout.fillWidth: true
                     spacing: Style.space(24)
                     // The page owns keyboard focus and the amount is the only
@@ -1558,7 +1564,7 @@ ShellRoot {
                     Item { Layout.fillHeight: true }
                     Action {
                         id: amountContinue
-                        text: backend.busy ? "Preparing…" : app.page === "send_amount" ? "Send" : "Request"
+                        text: backend.busy ? (app.ecashAutoConfirm ? "Creating…" : "Preparing…") : app.page === "send_amount" ? "Send" : "Request"
                         enabled: backend.unlocked && !backend.busy && !!backend.state.selected && app.entrySats > 0 && !app.entryOver
                         onClicked: backend.request(app.page === "send_amount" ? "send_ecash" : "create_invoice", app.page === "send_amount" ? {amount: String(app.entrySats), lock_to: app.lockTo} : {amount: String(app.entrySats)})
                     }
@@ -1626,7 +1632,9 @@ ShellRoot {
                         enabled: !clipboard.running
                         onClicked: app.copyText(backend.share.token || backend.share.invoice || "", backend.share.token ? "ecash token" : "invoice")
                     }
-                    Secondary { visible: !!backend.share.token && !parent.tokenClaimed; text: backend.busy ? "Checking…" : "Check Status"; enabled: !backend.busy; onClicked: backend.request("sync") }
+                    // With "Check sent ecash" on, reconciliation asks the mint
+                    // itself; the manual check exists only for the opted-out.
+                    Secondary { visible: !!backend.share.token && !parent.tokenClaimed && app.privacy.check_sent === false; text: backend.busy ? "Checking…" : "Check Status"; enabled: !backend.busy; onClicked: backend.request("sync") }
                 }
                 ColumnLayout {
                     visible: app.walletVisible && !backend.review && app.page === "complete"

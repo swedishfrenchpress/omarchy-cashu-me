@@ -98,7 +98,7 @@ The backend is a single long-running worker process controlled by QML through JS
 - Ecash send/receive using CDK's persisted operation record
 - BOLT11 invoice creation with melt (Lightning payment) operations
 - Duplicate token rejection and insufficient-funds validation
-- Review state expires after 5 minutes; cancellation releases prepared operations
+- Review state expires after 5 minutes; cancellation releases prepared operations. An ecash send is prepared and confirmed in one breath by the UI (`app.ecashAutoConfirm`), since the reference has no review step for it; Lightning payments, receipts and reclaims show their review
 - Timeout handling defers to reconciliation rather than retry loops
 
 **src/lightning.rs** — Settings → Payments → Lightning: an npub.cash Lightning address through CDK's `npubcash` feature (NIP-06 key from the seed, `<npub>@npubx.cash`, quotes minted at the receiving mint). Re-registers after every unlock; auto-claim runs from reconciliation at most every two minutes.

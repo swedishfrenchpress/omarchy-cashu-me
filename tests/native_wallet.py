@@ -40,6 +40,8 @@ CONTROLS = '''
         function phrase(): void { app.go("recovery"); revealPassword.text = "temporary native test password"; if (revealButton.enabled) revealButton.clicked() }
         function send(): void { app.tab("home"); app.go("send"); ecashChoice.clicked(); app.entryText = "8"; if (amountContinue.enabled) amountContinue.clicked() }
         function confirm(): void { if (confirmButton.enabled) confirmButton.clicked() }
+        function receiveShare(): void { var token = backend.share.token; app.go("receive"); app.receiveText = token; if (receiveReview.enabled) receiveReview.clicked() }
+        function reopen(): void { backend.request("show_pending_token", {operation_id: (backend.state.pending_sends || [])[0].id}) }
         function back(): void { app.back() }
         function capture(): void { surface.grabToImage(result => result.saveToFile(Quickshell.env("CASHU_ME_TEST_CAPTURE"))) }
         function navigate(destination: string): void { app.tab(destination) }
@@ -194,17 +196,22 @@ ShellRoot {
                             self.assertEqual(ipc(ui, "test", "navigate", page).returncode, 0)
                             wait(lambda s: s["page"] == page)
                             snap(page)
-                    call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
-                    # Presentation changes keep the same prepared payment and form tree.
+                    # An ecash send goes from the amount straight to the token,
+                    # as the reference does; the prepared review is confirmed
+                    # unseen, so the share arrives with no review ever shown.
+                    call("send"); wait(lambda s: s["hasShare"] and not s["hasReview"] and not s["busy"] and s["balance"] == "56")
+                    # Presentation changes keep the same prepared operation and
+                    # form tree: receiving the wallet's own token opens a review.
+                    call("receiveShare"); wait(lambda s: s["hasReview"] and not s["busy"])
                     self.assertEqual(ipc(ui, "wallet", "expand").returncode, 0)
-                    wait(lambda s: s["hasReview"] and s["balance"] == "64")
+                    wait(lambda s: s["hasReview"] and s["balance"] == "56")
                     self.assertEqual(ipc(ui, "wallet", "hide").returncode, 0)
                     self.assertEqual(ipc(ui, "wallet", "show").returncode, 0)
                     wait(lambda s: s["hasReview"] and not s["busy"])
-                    call("back"); wait(lambda s: not s["hasReview"] and not s["busy"] and s["page"] == "send_amount")
-                    self.assertEqual(json.loads(ipc(ui, "test", "inspect").stdout)["balance"], "64")
-                    call("send"); wait(lambda s: s["hasReview"] and not s["busy"])
-                    call("confirm"); wait(lambda s: s["hasShare"] and not s["hasReview"] and not s["busy"])
+                    call("back"); wait(lambda s: not s["hasReview"] and not s["busy"] and s["page"] == "receive")
+                    self.assertEqual(json.loads(ipc(ui, "test", "inspect").stdout)["balance"], "56")
+                    # Back on the pending token for the lock to clear.
+                    call("reopen"); wait(lambda s: s["hasShare"] and not s["busy"])
                     call("protect"); wait(lambda s: s["passwordRequired"] and not s["busy"])
                     call("phrase"); wait(lambda s: s["hasPhrase"] and not s["busy"])
                     self.assertEqual(ipc(shell, "lock", "setLocked", "true").returncode, 0)
