@@ -601,6 +601,9 @@ ShellRoot {
             if (method === "locked_request") { if (app.page !== "qr") app.go("qr") }
         }
         onFailed: method => {
+            // A refused unseen confirm would leave a hidden review holding
+            // the wallet; release it so the amount page is live again.
+            if (method === "confirm_payment" && app.ecashAutoConfirm) backend.request("cancel_payment", {review_id: backend.reviewId})
             if (method === "add_mint") app.firstMintQueue = []
             if (method === "restore_mint") {
                 var current = app.restoreMintList.find(mint => (app.restoreResults[mint.url] || {}).status === "restoring")

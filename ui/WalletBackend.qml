@@ -113,8 +113,9 @@ QtObject {
             if (message.review_done) { review = null; reviewId = "" }
             if (message.error) error = message.error
             if (message.result && message.result.review) {
-                review = message.result.review
+                // The id first: reviewChanged handlers confirm or cancel by it.
                 reviewId = message.result.review_id
+                review = message.result.review
             }
             if (message.result && (message.result.token || message.result.invoice)) {
                 share = message.result
