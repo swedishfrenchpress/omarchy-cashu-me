@@ -1622,7 +1622,6 @@ ShellRoot {
                         Accessible.role: Accessible.Button
                         Accessible.name: shareQr.frames.length > 1 ? "Animated QR code, " + shareQr.speeds[shareQr.speed].name + " speed. Tap to change the speed" : "QR code"
                     }
-                    Label { visible: shareQr.frames.length > 1; text: "Animated code · " + shareQr.speeds[shareQr.speed].name + " · tap to change speed"; opacity: 0.5; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     AmountDisplay { visible: !!backend.share.amount; amount: backend.share.amount; size: Style.space(app.compact ? 28 : 32); animated: false }
                     Label { visible: !!backend.share.expiry; text: parent.expiresIn > 0 ? "󰔟  Expires in " + app.remaining(parent.expiresIn) : "Expired"; color: parent.expiresIn > 0 ? Color.foreground : app.destructive; opacity: parent.expiresIn > 0 ? 0.6 : 1; font.pixelSize: Style.font.caption; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     Label { visible: parent.tokenClaimed; text: "󰄬  Claimed"; color: app.received; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
