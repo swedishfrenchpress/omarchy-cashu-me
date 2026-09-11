@@ -1240,7 +1240,11 @@ ShellRoot {
                     spacing: Style.space(22)
                     readonly property string outcome: String(app.transaction.status || "").toLowerCase()
                     readonly property bool settled: outcome === "completed" || outcome === "paid"
-                    readonly property bool reclaimed: app.transaction.reclaimed === true
+                    // CDK's "failed" on an outgoing ecash send means the token never
+                    // left: the swap did not complete, or the send was reclaimed.
+                    // Either way the money stayed, so it reads as Reclaimed; a red
+                    // cross is reserved for a Lightning payment that failed.
+                    readonly property bool reclaimed: app.transaction.reclaimed === true || (outcome === "failed" && app.transaction.direction === "Outgoing" && app.transaction.kind === "Ecash")
                     readonly property bool failed: outcome === "failed" && !reclaimed
                     Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     // The reference's result mark: a filled tile with a check for
