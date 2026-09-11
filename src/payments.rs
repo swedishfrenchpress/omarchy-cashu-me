@@ -208,6 +208,7 @@ pub async fn run(
                     "Reclaim is unresolved. The wallet will reconcile this transfer's status.",
                     "Cannot reclaim this token. It may already be spent; the wallet will reconcile its status.",
                     wallet.revoke_send(operation_id)).await?;
+                session.note_reclaimed(operation_id);
                 Ok(json!({"reclaimed":true,"amount":amount.to_string()}))
             }
             _ => Err("Unknown payment operation.")

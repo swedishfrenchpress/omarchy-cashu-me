@@ -1240,12 +1240,13 @@ ShellRoot {
                     spacing: Style.space(22)
                     readonly property string outcome: String(app.transaction.status || "").toLowerCase()
                     readonly property bool settled: outcome === "completed" || outcome === "paid"
-                    readonly property bool failed: outcome === "failed"
+                    readonly property bool reclaimed: app.transaction.reclaimed === true
+                    readonly property bool failed: outcome === "failed" && !reclaimed
                     Label { text: app.titleFor(app.transaction); font.bold: true; font.pixelSize: Style.font.heading; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
                     // The reference's result mark: a filled tile with a check for
                     // a settled payment, a clock while pending, a cross when failed.
                     Label {
-                        text: parent.settled ? "󰄬" : parent.failed ? "󰅖" : "󰔟"
+                        text: parent.settled ? "󰄬" : parent.failed ? "󰅖" : parent.reclaimed ? "󰑙" : "󰔟"
                         color: parent.failed ? app.destructive : Color.foreground
                         opacity: parent.settled || parent.failed ? 1 : 0.6
                         font.pixelSize: Style.space(48)
@@ -1255,7 +1256,7 @@ ShellRoot {
                         horizontalAlignment: Text.AlignHCenter
                     }
                     AmountDisplay { amount: app.transaction.amount; emphasized: true; animated: false }
-                    DetailRow { heading: "Status"; value: parent.settled ? (app.transaction.kind === "Lightning" ? "Paid" : "Completed") : parent.failed ? "Failed" : "Pending" }
+                    DetailRow { heading: "Status"; value: parent.settled ? (app.transaction.kind === "Lightning" ? "Paid" : "Claimed") : parent.reclaimed ? "Reclaimed" : parent.failed ? "Failed" : "Pending" }
                     DetailRow { heading: "Date"; value: app.momentFor(app.transaction.timestamp) }
                     DetailRow { heading: "Mint"; value: app.transaction.mint_name || app.transaction.mint || "" }
                     DetailRow { visible: Number(app.transaction.fee || 0) > 0; heading: "Fee"; value: app.primaryAmount(app.transaction.fee) }
