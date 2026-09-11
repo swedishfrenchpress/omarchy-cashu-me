@@ -113,14 +113,15 @@ ShellRoot {
                         return result
                     def wait(predicate, seconds=15):
                         deadline = time.monotonic() + seconds
+                        last = None
                         while time.monotonic() < deadline:
                             response = ipc(ui, "test", "inspect")
                             if response.returncode == 0:
-                                state = json.loads(response.stdout)
+                                state = last = json.loads(response.stdout)
                                 self.assertFalse(state["error"], state["error"])
                                 if predicate(state): return state
                             time.sleep(0.1)
-                        self.fail("UI state did not converge: " + (base / "qml.log").read_text())
+                        self.fail("UI state did not converge; last state " + json.dumps(last) + "\n" + (base / "qml.log").read_text())
                     def snap(name, settle=0.2):
                         # grabToImage saves asynchronously and fails silently
                         # when the surface has no window, so wait for a fresh

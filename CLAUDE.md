@@ -49,12 +49,13 @@ cashu-me --quit
 The wallet is validated against a temporary fake-payment CDK mint using Python integration tests. **Do this before making wallet changes:**
 
 ```sh
-# Terminal 1: Build and install the test mint
-cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/cashu-me-test-tools
-/tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint config init --file tests/mint.toml --new-mint
+# Terminal 1: Build and install the test mint (a persistent path: /tmp does not survive a reboot)
+cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root ~/.local/share/cashu-me-test-tools
+mkdir -p ~/.local/share/cashu-me-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' ~/.local/share/cashu-me-test-tools/bin/cdk-mintd -w ~/.local/share/cashu-me-local-mint config init --file tests/mint.toml --new-mint
 
 # Terminal 2: Start the test mint (use this exact seed for test fixtures)
-CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' ~/.local/share/cashu-me-test-tools/bin/cdk-mintd -w ~/.local/share/cashu-me-local-mint
 
 # Terminal 3: Run integration tests
 python3 tests/wallet_integration.py
@@ -254,7 +255,7 @@ See `PLAN.md` for detailed progress tracking and `docs/testing.md` for validatio
 
 ## Dependencies
 
-- **Rust**: 1.88+
+- **Rust**: 1.88+, installed through mise (`mise use -g rust@stable`), never the pacman package: an Omarchy system update removed the pacman `rust` on 2026-09-11 and took the worker build and the fake-mint tests with it. The test mint lives under `~/.local/share` for the same reason: `/tmp` does not survive a reboot
 - **Cargo**: Latest stable
 - **Omarchy**: 4.0.2 with Quickshell, Commons, and Ui modules installed
 - **Development tools**: C compiler, OpenSSL dev files, `inotifywait`

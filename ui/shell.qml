@@ -63,7 +63,8 @@ ShellRoot {
     // page creates the token. The worker still prepares and then confirms,
     // so the prepared review is confirmed the moment it arrives and never
     // shown; Lightning payments, receipts and reclaims keep their review.
-    readonly property bool ecashAutoConfirm: !!backend.review && backend.review.kind === "Send ecash" && !backend.review.reclaim && !backend.review.receiving
+    function isEcashSend(review) { return !!review && review.kind === "Send ecash" && !review.reclaim && !review.receiving }
+    readonly property bool ecashAutoConfirm: isEcashSend(backend.review)
     // The reference's History filter is by status, All / Pending / Completed,
     // not by direction; a failed payment shows only under All.
     readonly property var activity: (backend.state.history || []).filter(tx => {
@@ -562,7 +563,9 @@ ShellRoot {
     WalletBackend {
         id: backend
         onShowResult: { app.revealShare = false; app.trail = []; app.page = "share" }
-        onReviewChanged: if (app.ecashAutoConfirm) backend.request("confirm_payment", {review_id: backend.reviewId})
+        // Asked of the review itself, not of app.ecashAutoConfirm: this
+        // handler can run before that binding has caught up with the change.
+        onReviewChanged: if (app.isEcashSend(backend.review)) backend.request("confirm_payment", {review_id: backend.reviewId})
         onPaymentFinished: { app.trail = []; app.page = "complete" }
         onMintAdded: app.finishAddMint()
         onReadyChanged: {
@@ -603,7 +606,7 @@ ShellRoot {
         onFailed: method => {
             // A refused unseen confirm would leave a hidden review holding
             // the wallet; release it so the amount page is live again.
-            if (method === "confirm_payment" && app.ecashAutoConfirm) backend.request("cancel_payment", {review_id: backend.reviewId})
+            if (method === "confirm_payment" && app.isEcashSend(backend.review)) backend.request("cancel_payment", {review_id: backend.reviewId})
             if (method === "add_mint") app.firstMintQueue = []
             if (method === "restore_mint") {
                 var current = app.restoreMintList.find(mint => (app.restoreResults[mint.url] || {}).status === "restoring")

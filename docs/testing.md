@@ -23,14 +23,15 @@ contain.
 Build the optional CDK mint test tool:
 
 ```sh
-cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root /tmp/cashu-me-test-tools
-/tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint config init --file tests/mint.toml --new-mint
+cargo install cdk-mintd --version 0.18.0 --locked --no-default-features --features sqlite,fakewallet --root ~/.local/share/cashu-me-test-tools
+mkdir -p ~/.local/share/cashu-me-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' ~/.local/share/cashu-me-test-tools/bin/cdk-mintd -w ~/.local/share/cashu-me-local-mint config init --file tests/mint.toml --new-mint
 ```
 
 Then start it in a separate terminal using this publicly known BIP39 test fixture (never use this seed for real funds):
 
 ```sh
-CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' /tmp/cashu-me-test-tools/bin/cdk-mintd -w /tmp/cashu-me-local-mint
+CASHU_ME_TEST_MINT_SEED='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' ~/.local/share/cashu-me-test-tools/bin/cdk-mintd -w ~/.local/share/cashu-me-local-mint
 ```
 
 It listens on loopback port 33381, advertises the name `cashu.me test mint`, and simulates Lightning payments. HTTP mint URLs are accepted only for loopback hosts. Run:
