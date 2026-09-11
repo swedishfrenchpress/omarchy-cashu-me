@@ -250,6 +250,7 @@ See `PLAN.md` for detailed progress tracking and `docs/testing.md` for validatio
 - `$CASHU_ME_WINDOW`: Set to "1" to open in window mode instead of compact panel
 - `$CASHU_ME_TEST_MINT_SEED`: BIP39 seed for the fake test mint (use only the fixture in `docs/testing.md`)
 - `$CASHU_ME_TEST_WAYLAND`: Set to "1" to render the actual panel on a running Wayland desktop
+- `$CASHU_ME_CAMERA`: A V4L2 node for the camera scan; otherwise `bin/scan-qr` queries every `/dev/video*` and takes the first single-plane capture device, because `/dev/video0` is not always a camera (Apple's ISP lists a metadata node first)
 
 ## Dependencies
 

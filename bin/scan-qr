@@ -1,13 +1,55 @@
 #!/usr/bin/env python3
 """QR input helper. Bearer data only goes to the parent through stdout."""
+import fcntl
+import glob
 import json
+import os
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 child = None
+
+# zbarcam opens /dev/video0 unless told otherwise, and on machines whose
+# first node is not a capture device (Apple's ISP exposes metadata first,
+# some capture cards expose an output node) it exits at once with "does not
+# support usable CAPTURE". VIDIOC_QUERYCAP over each node finds the camera
+# without depending on v4l-utils; CASHU_ME_CAMERA names one outright.
+VIDIOC_QUERYCAP = 0x80685600
+CAP_VIDEO_CAPTURE = 0x00000001
+CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+CAP_READWRITE = 0x01000000
+CAP_STREAMING = 0x04000000
+CAP_DEVICE_CAPS = 0x80000000
+
+
+def capture_devices():
+    chosen = os.environ.get("CASHU_ME_CAMERA")
+    if chosen:
+        return [chosen]
+    found = []
+    for node in sorted(glob.glob("/dev/video*"), key=lambda n: int(n[10:]) if n[10:].isdigit() else 999):
+        try:
+            fd = os.open(node, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            answer = bytearray(104)
+            fcntl.ioctl(fd, VIDIOC_QUERYCAP, answer)
+        except OSError:
+            continue
+        finally:
+            os.close(fd)
+        capabilities, device_caps = struct.unpack_from("<II", answer, 84)
+        caps = device_caps if capabilities & CAP_DEVICE_CAPS else capabilities
+        # Single-plane capture only: zbar reads through the classic
+        # capture interface and cannot drive a multi-plane node.
+        if caps & CAP_VIDEO_CAPTURE and caps & (CAP_STREAMING | CAP_READWRITE):
+            found.append(node)
+    return found
 
 
 def cleanup(signum=None, frame=None):
@@ -48,8 +90,11 @@ for received in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
 try:
     mode = sys.argv[1]
     if mode == "camera":
+        devices = capture_devices()
+        if not devices:
+            raise ValueError("No camera was found.")
         decoded = run(["zbarcam", "--raw", "--quiet", "--oneshot", "--nodisplay", "--nodbus",
-                       "--prescale=640x480", "-Sdisable", "-Sqrcode.enable"])
+                       "--prescale=640x480", "-Sdisable", "-Sqrcode.enable", devices[0]])
     else:
         with tempfile.TemporaryDirectory(prefix="cashu-me-qr-") as temporary:
             if mode == "screen":
